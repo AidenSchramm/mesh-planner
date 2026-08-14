@@ -85,6 +85,7 @@ function slimNode(n) {
     lat: n.latitude / 1e7,
     lon: n.longitude / 1e7,
     alt: n.altitude,
+    prec: n.position_precision ?? null,
     hw: n.hardware_model_name,
     fw: n.firmware_version,
     region: n.region_name,
@@ -115,6 +116,7 @@ function slimMeshmapNode(id, n) {
     lat: n.latitude / 1e7,
     lon: n.longitude / 1e7,
     alt: n.altitude ?? null,
+    prec: n.precision ?? null,
     hw: n.hwModel || null,
     fw: null,
     region: null,
@@ -248,6 +250,7 @@ function mergeLive(baseNodes) {
       ...n,
       lat: ln.lat, lon: ln.lon,
       alt: ln.alt ?? n.alt,
+      prec: ln.prec ?? n.prec,
       roleName: ln.roleName ?? n.roleName,
       preset: ln.preset ?? n.preset,
       region: ln.region ?? n.region,
@@ -267,7 +270,7 @@ function mergeLive(baseNodes) {
       short: ln.short || '',
       role: null,
       roleName: ln.roleName || 'CLIENT',
-      lat: ln.lat, lon: ln.lon, alt: ln.alt,
+      lat: ln.lat, lon: ln.lon, alt: ln.alt, prec: ln.prec ?? null,
       hw: null, fw: ln.fw, region: ln.region, preset: ln.preset,
       util: null, airTx: null, battery: null, neighbours: null,
       posAt: iso, updAt: iso,
@@ -300,6 +303,7 @@ async function handleApiNodes(req, res, url) {
       const r = reliability[n.id];
       if (!r) return n;
       const out = { ...n };
+      out.relSamples = r.s;
       // require half a day of samples before claiming an uptime figure
       if (r.s >= 12) out.uptime = r.u / r.s;
       // moved >500 m in over 20% of samples -> treat as a mobile node

@@ -93,6 +93,7 @@ function parseMapReport(buf) {
     region: num(6), preset: num(7),
     lat: sf32(9), lon: sf32(10),
     alt: (() => { const x = field(fs, 11); return x && x.wt === 0 ? vInt32(x.v) : null; })(),
+    prec: num(12),
     numLocal: num(13),
   };
 }
@@ -165,6 +166,7 @@ function handleMapPayload(payload) {
     fw: r.fw || null,
     lat, lon,
     alt: r.alt,
+    prec: r.prec,
     numLocal: r.numLocal,
     at: Date.now(),
   });

@@ -827,6 +827,7 @@
   function renderEmpty(label) {
     $('stats-panel').classList.add('hidden');
     $('node-panel').classList.add('hidden');
+    $('quality-panel').classList.add('hidden');
     $('suggestions-panel').classList.remove('hidden');
     nodesLayer.clearLayers(); linksLayer.clearLayers();
     reportedLayer.clearLayers(); suggestLayer.clearLayers();
@@ -1000,6 +1001,132 @@ ${wpts}
     URL.revokeObjectURL(a.href);
   }
 
+  // ---- node data quality card -----------------------------------------------
+
+  // Position precision bits -> approximate error radius in meters
+  // (coords are int32 1e-7 degrees; masking to `bits` gives step 2^(32-bits))
+  function precisionErrM(bits) {
+    return (2 ** (32 - bits)) * 1e-7 * 111320 / 2;
+  }
+
+  function renderQuality(i) {
+    const { nodes, opts, calibration, heightEstimates } = lastResult;
+    const n = nodes[i];
+    const checks = [];
+    let suspicion = 0;
+    // scored=true rows feed the verdict (data-correctness signals);
+    // informational rows (uptime, freshness) show but don't score
+    const add = (level, title, detail, scored = true) => {
+      checks.push({ level, title, detail });
+      if (scored && level === 'bad') suspicion += 2;
+      if (scored && level === 'warn') suspicion += 1;
+    };
+
+    if (n.adjusted) {
+      add('ok', 'Community corrected',
+        'This node’s height/position has been manually corrected — the corrected values are used for all modeling below.', false);
+    }
+
+    // position precision
+    if (n.prec != null && n.prec > 0 && n.prec < 32) {
+      const err = Math.round(precisionErrM(n.prec));
+      if (err >= 800) {
+        add('bad', 'Position truncated for privacy',
+          `Broadcast at reduced precision — the true location is anywhere within ~±${(err / 1000).toFixed(1)} km. Terrain modeling against this position is unreliable.`);
+      } else if (err >= 150) {
+        add('warn', 'Position slightly truncated',
+          `~±${err} m broadcast precision — fine for area modeling, may matter on ridgelines.`);
+      } else {
+        add('ok', 'Position precision', `~±${err} m — effectively exact for RF modeling.`);
+      }
+    } else if (n.prec === 32) {
+      add('ok', 'Position precision', 'Full precision broadcast.');
+    } else {
+      add('unk', 'Position precision unknown', 'This node’s data source doesn’t report a precision setting.', false);
+    }
+
+    // altitude plausibility vs terrain
+    const terrain = Elevation.elevationAt(n.lat, n.lon, opts.zoom);
+    if (n.altOverride != null) {
+      add('ok', 'Height corrected', `Community-set ${Math.round(n.altOverride)} m ASL (${Math.round(n.ant)} m above terrain).`, false);
+    } else if (n.alt == null) {
+      add('unk', 'Altitude not reported', `Modeled at the global default ${opts.antenna} m above terrain.`, false);
+    } else {
+      const diff = n.alt - terrain;
+      if (diff < -30) {
+        add('bad', 'GPS altitude below ground',
+          `Reports ${Math.round(n.alt)} m ASL but the terrain here is ${Math.round(terrain)} m — GPS altitude is off by ${Math.round(-diff)} m. Worth correcting via Adjust.`);
+      } else if (diff > 120) {
+        add('warn', 'Altitude far above terrain',
+          `Reports ${Math.round(diff)} m above ground — genuine tower/high-rise, or GPS error.`);
+      } else {
+        add('ok', 'Altitude plausible',
+          `${Math.round(n.alt)} m ASL, ${diff >= 0 ? '+' : ''}${Math.round(diff)} m vs local terrain.`);
+      }
+    }
+
+    // movement / stability
+    if (n.mobile || /TRACKER/.test(n.roleName || '')) {
+      add('warn', 'Mobile node',
+        'Position hops between server samples — the shown location is a snapshot. Excluded from calibration and role suggestions.');
+    } else if ((n.relSamples || 0) >= 5) {
+      add('ok', 'Position stable', `No significant movement across ${n.relSamples} server samples.`);
+    } else {
+      add('unk', 'Stability unknown', 'Still accumulating movement samples (a few hours of tracking needed).', false);
+    }
+
+    // RF evidence from observed links
+    const detail = (calibration && calibration.pairsDetail) || [];
+    const mine = detail.filter((p) => p.i === i || p.j === i);
+    const contradicting = mine.filter((p) => p.status === 'blocked');
+    if (mine.length === 0) {
+      add('unk', 'No RF observations yet',
+        'No direct receptions involving this node recorded so far — evidence accumulates as gateways hear it.', false);
+    } else if (contradicting.length === 0) {
+      const totObs = mine.reduce((s, p) => s + p.nObs, 0);
+      add('ok', 'RF evidence consistent',
+        `${mine.length} observed link${mine.length === 1 ? '' : 's'}${totObs ? ` (${totObs} receptions)` : ''} all compatible with the terrain model.`);
+    } else {
+      const est = (heightEstimates || []).find((e) => e.i === i);
+      add(contradicting.length > mine.length / 2 ? 'bad' : 'warn', 'RF evidence contradicts model',
+        `${contradicting.length} of ${mine.length} observed links shouldn’t work according to the terrain model` +
+        (est ? ` — observations suggest the antenna is really ~${est.height} m above terrain (see the HEIGHT EST suggestion).` : ' — reported height or position is likely wrong.'));
+    }
+
+    // informational rows: freshness + uptime
+    const ageDays = n.posAt ? (Date.now() - Date.parse(n.posAt)) / 86400000 : null;
+    if (ageDays != null && ageDays > 7) {
+      add('warn', 'Stale position', `Last position report ${Math.round(ageDays)} days ago.`, false);
+    } else if (ageDays != null) {
+      add('ok', 'Position fresh', `Updated ${fmtAgo(n.posAt)}.`, false);
+    }
+    if (n.uptime != null) {
+      add(n.uptime < 0.5 ? 'warn' : 'ok', 'Uptime',
+        `Online ${Math.round(n.uptime * 100)}% of recent server samples.`, false);
+    }
+
+    const verdict = $('q-verdict');
+    if (suspicion === 0) {
+      verdict.className = 'link-status ok';
+      verdict.textContent = 'Reported data looks trustworthy';
+    } else if (suspicion <= 2) {
+      verdict.className = 'link-status warn';
+      verdict.textContent = 'Some reported data is suspect';
+    } else {
+      verdict.className = 'link-status bad';
+      verdict.textContent = 'Reported data likely inaccurate';
+    }
+
+    const IC = { ok: '✓', warn: '!', bad: '✕', unk: '?' };
+    $('q-name').textContent = n.name;
+    $('q-checks').innerHTML = checks.map((c) =>
+      `<div class="q-row"><span class="q-ic ${c.level}">${IC[c.level]}</span>
+        <div><div class="q-t">${c.title}</div><div class="q-d">${c.detail}</div></div></div>`).join('');
+    const panel = $('quality-panel');
+    panel.classList.remove('hidden');
+    panel.open = true;
+  }
+
   // ---- point-to-point link panel --------------------------------------------
 
   let selectedNode = null;
@@ -1025,6 +1152,7 @@ ${wpts}
     $('link-list').innerHTML = '';
     $('link-list').classList.remove('has-items');
     $('link-detail').classList.add('hidden');
+    $('quality-panel').classList.add('hidden');
   }
 
   function selectNode(i) {
@@ -1037,6 +1165,7 @@ ${wpts}
     }
     styleNode(i, NODE_STYLE_SELECTED);
     if (nodeMarkers[i]) nodeMarkers[i].bringToFront();
+    renderQuality(i);
     const { nodes, opts } = lastResult;
     const n = nodes[i];
     const panel = $('node-panel');

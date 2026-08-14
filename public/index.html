@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mesh Planner — Meshtastic terrain &amp; coverage analysis</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="styles.css?v=14">
+<link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
 
@@ -179,6 +179,15 @@
       </div>
     </details>
 
+    <details class="card hidden" open id="quality-panel">
+      <summary>Node data quality</summary>
+      <div class="card-body">
+        <div id="q-name" class="q-name"></div>
+        <div id="q-verdict" class="link-status"></div>
+        <div id="q-checks"></div>
+      </div>
+    </details>
+
     <details class="card hidden" open id="node-panel">
       <summary>Point-to-point links</summary>
       <div class="card-body">
@@ -211,8 +220,8 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="js/elevation.js?v=14"></script>
-<script src="js/analysis.js?v=14"></script>
-<script src="js/app.js?v=14"></script>
+<script src="js/elevation.js?v=15"></script>
+<script src="js/analysis.js?v=15"></script>
+<script src="js/app.js?v=15"></script>
 </body>
 </html>

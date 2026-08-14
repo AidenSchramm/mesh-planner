@@ -172,13 +172,14 @@ const Analysis = (() => {
     // the terrain between the *reported* coordinates, so exclude them.
     const isMobile = (n) => n.mobile === true || /TRACKER/.test(n.roleName || '');
     let observed = 0, agree = 0, excludedMobile = 0;
-    const disagreements = [], excesses = [];
+    const disagreements = [], excesses = [], pairsDetail = [];
     for (const p of pairs.values()) {
       const a = nodes[p.i], b = nodes[p.j];
       if (isMobile(a) || isMobile(b)) { excludedMobile++; continue; }
       const r = los(a.lat, a.lon, a.ant ?? antenna, b.lat, b.lon, b.ant ?? antenna, zoom, fGHz);
       if (r.dist > 100000) continue; // implausible for direct RF — bad position data
       observed++;
+      pairsDetail.push({ i: p.i, j: p.j, status: r.status, nObs: p.nObs || 0 });
       if (r.status !== 'blocked') agree++;
       else disagreements.push({
         i: p.i, j: p.j, dist: r.dist,
@@ -204,7 +205,7 @@ const Analysis = (() => {
     }
     // strongest-signal disagreements first — they're the clearest data errors
     disagreements.sort((x, y) => (y.snr ?? -99) - (x.snr ?? -99));
-    return { observed, agree, disagreements, envLoss, snrSamples: excesses.length, excludedMobile };
+    return { observed, agree, disagreements, envLoss, snrSamples: excesses.length, excludedMobile, pairsDetail };
   }
 
   // Compute all plausible links between nodes (pairs within maxRange).

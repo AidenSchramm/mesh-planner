@@ -335,6 +335,35 @@ button.wide { width: 100%; margin-top: 10px; }
 }
 .icon-btn:hover { color: var(--text); background: var(--card2); filter: none; }
 
+/* ---- node data quality ---- */
+.q-name { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+#q-checks { margin-top: 10px; }
+.q-row {
+  display: flex;
+  gap: 9px;
+  padding: 6px 2px;
+  border-bottom: 1px solid #1d2530;
+  align-items: flex-start;
+}
+.q-row:last-child { border-bottom: none; }
+.q-ic {
+  flex-shrink: 0;
+  width: 17px; height: 17px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.q-ic.ok { background: #12331f88; color: var(--clear); }
+.q-ic.warn { background: #3d2c0d88; color: var(--marginal); }
+.q-ic.bad { background: #3c161488; color: var(--blocked); }
+.q-ic.unk { background: var(--card2); color: var(--muted); }
+.q-t { font-size: 12.5px; font-weight: 600; line-height: 1.35; }
+.q-d { font-size: 11.5px; color: var(--muted); line-height: 1.45; margin-top: 1px; }
+
 /* ---- suggestions ---- */
 .sugg {
   background: var(--card2);
