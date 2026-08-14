@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const MqttLive = require('./mqtt-live');
+const LinkStore = require('./linkstore');
 
 const PORT = process.env.PORT || 8620;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -525,6 +526,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/nodes') return await handleApiNodes(req, res, url);
     if (url.pathname.startsWith('/api/overrides')) return await handleOverrides(req, res, url);
     if (url.pathname === '/api/geocode') return await handleGeocode(req, res, url);
+    if (url.pathname === '/api/linkobs' && req.method === 'POST') {
+      let body;
+      try { body = JSON.parse(await readBody(req, 32 * 1024)); } catch { return sendJson(req, res, { error: 'bad JSON' }, 400); }
+      if (!Array.isArray(body?.ids)) return sendJson(req, res, { error: 'ids array required' }, 400);
+      return sendJson(req, res, { obs: LinkStore.query(body.ids) });
+    }
     const tm = url.pathname.match(/^\/tiles\/(\d+)\/(\d+)\/(\d+)\.png$/);
     if (tm) return await handleTile(req, res, tm[1], tm[2], tm[3]);
     if (url.pathname === '/api/health') {
@@ -534,6 +541,7 @@ const server = http.createServer(async (req, res) => {
         cacheAge: cache.at ? Date.now() - cache.at : null,
         overrides: Object.keys(overrides).length,
         mqtt: MqttLive.stats(),
+        linkObs: LinkStore.stats(),
       });
     }
     return serveStatic(req, res, url);
@@ -550,5 +558,14 @@ server.listen(PORT, () => {
   console.log(`Mesh Planner running at http://localhost:${PORT}`);
   console.log(`Data dir: ${DATA_DIR} (${Object.keys(overrides).length} overrides)`);
   getNodes().catch((e) => console.warn('[nodes] warmup failed:', e.message));
-  MqttLive.start();
+  const obsEnabled = LinkStore.init(DATA_DIR);
+  MqttLive.start(obsEnabled ? { onLinkObs: LinkStore.add } : {});
 });
+
+// flush buffered link observations on service restart/stop
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    try { LinkStore.flush(); } catch {}
+    process.exit(0);
+  });
+}

@@ -54,6 +54,25 @@ map and click **Analyze current map view**.
 - **Permalinks** — the URL hash encodes center+radius (e.g. `/#43.53,-96.69,30`),
   so any analysis view is shareable. Suggested sites export as GPX waypoints.
 
+## Per-link SNR observations
+
+The server harvests direct-reception evidence from the public MQTT broker's
+envelope metadata: whenever a gateway heard a packet with zero hops consumed
+(`hop_start == hop_limit`, not `via_mqtt`), that's a measured RF link between
+sender and gateway with real SNR/RSSI — no payload decryption involved. These
+are aggregated per-pair per-day into SQLite (`data/linkobs.db`, Node's built-in
+`node:sqlite`, 90-day retention, region scope via `MQTT_REGIONS`, default US).
+
+The data feeds three things:
+- **Calibration** — observed pairs (≥3 receptions) join neighbour-info links in
+  the agreement scorecard and clutter-loss fitting.
+- **Link panel** — observed pairs show a green reception-count badge in the
+  link list, and the detail card adds measured SNR next to the model's numbers.
+- **Height estimation** — for nodes whose observed links the model calls
+  blocked, the app solves for the smallest antenna height that makes ≥80% of
+  them viable and offers it as a HEIGHT EST card that opens Adjust prefilled.
+  Estimates sharpen as receptions accumulate.
+
 ## Live data & accuracy
 
 - The server subscribes to the public Meshtastic MQTT broker's **map-report topics**

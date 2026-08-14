@@ -15,7 +15,12 @@ const HOST = process.env.MQTT_HOST || 'mqtt.meshtastic.org';
 const PORT = parseInt(process.env.MQTT_PORT || '1883', 10);
 const USER = 'meshdev';
 const PASS = 'large4cats';
-const TOPICS = ['msh/+/2/map/#', 'msh/+/+/2/map/#', 'msh/+/+/+/2/map/#'];
+// Map reports are subscribed globally (cheap). Link-observation harvesting
+// needs the full per-region traffic tree — bandwidth scales with region count,
+// so scope it (comma-separated env override, e.g. MQTT_REGIONS=US,EU_868).
+const REGIONS = (process.env.MQTT_REGIONS || 'US').split(',').map((s) => s.trim()).filter(Boolean);
+const TOPICS = ['msh/+/2/map/#', 'msh/+/+/2/map/#', 'msh/+/+/+/2/map/#',
+  ...REGIONS.map((r) => `msh/${r}/#`)];
 const KEEPALIVE_S = 60;
 const LIVE_TTL_MS = 24 * 3600 * 1000;
 
@@ -122,11 +127,14 @@ const state = {
   connected: false,
   decoded: 0,
   malformed: 0,
+  linkObs: 0,
   lastMsgAt: null,
   reconnectMs: 5000,
   live: new Map(), // node id -> { name, short, roleName, region, preset, fw, lat, lon, alt, numLocal, at }
   stopped: false,
 };
+
+let onLinkObsCb = null;
 
 function log(...args) { console.log('[mqtt]', ...args); }
 
@@ -163,11 +171,47 @@ function handleMapPayload(payload) {
   state.decoded++;
 }
 
+// Envelope-metadata link observation: the gateway heard `from` directly off
+// the air when the packet consumed zero hops and wasn't injected via MQTT.
+// rx_snr/rx_rssi live in the plaintext MeshPacket header — no payload
+// decryption involved.
+function handleLinkEnvelope(payload) {
+  const env = pbFields(payload);
+  const pktF = field(env, 1);
+  const gwF = field(env, 3); // gateway_id, e.g. "!a1b2c3d4"
+  if (!pktF || pktF.wt !== 2 || !gwF || gwF.wt !== 2) return;
+  const gwStr = gwF.v.toString('utf8');
+  if (!gwStr.startsWith('!')) return;
+  const gw = parseInt(gwStr.slice(1), 16) >>> 0;
+  if (!gw) return;
+  const pkt = pbFields(pktF.v);
+  const fromF = field(pkt, 1);
+  if (!fromF) return;
+  const from = fromF.wt === 5 ? fromF.v.readUInt32LE(0) : Number(BigInt.asUintN(32, fromF.v));
+  if (!from || from === gw) return;
+  const num = (f) => { const x = field(pkt, f); return x && x.wt === 0 ? vNum(x.v) : null; };
+  if (num(14)) return; // via_mqtt: gateway got it from the broker, not RF
+  const hopLimit = num(9), hopStart = num(15);
+  if (!hopStart || hopLimit == null || hopLimit !== hopStart) return; // must be 0 hops
+  const snrF = field(pkt, 8); // rx_snr float
+  if (!snrF || snrF.wt !== 5) return;
+  const snr = snrF.v.readFloatLE(0);
+  if (!Number.isFinite(snr) || snr === 0 || snr < -30 || snr > 15) return;
+  const rssiF = field(pkt, 12);
+  const rssi = rssiF && rssiF.wt === 0 ? vInt32(rssiF.v) : null;
+  state.linkObs++;
+  if (onLinkObsCb) {
+    onLinkObsCb({ a: Math.min(from, gw), b: Math.max(from, gw), snr, rssi, at: Date.now() });
+  }
+}
+
 function onPublish(topic, payload) {
   state.lastMsgAt = Date.now();
-  if (!/\/2\/map\//.test(topic + '/')) return;
+  // json/stat topics carry text, not ServiceEnvelope protobufs
+  if (/\/(json|stat)\//.test(topic + '/')) return;
   try {
-    handleMapPayload(payload);
+    if (/\/2\/map\//.test(topic + '/')) handleMapPayload(payload);
+    else handleLinkEnvelope(payload);
   } catch {
     state.malformed++;
   }
@@ -258,7 +302,8 @@ function connect() {
   sock.on('close', onGone('connection closed'));
 }
 
-function start() {
+function start(opts = {}) {
+  onLinkObsCb = opts.onLinkObs || null;
   if (process.env.MQTT_DISABLE === '1') {
     log('disabled via MQTT_DISABLE=1');
     return;
@@ -286,8 +331,10 @@ function stats() {
     connected: state.connected,
     liveNodes: state.live.size,
     decoded: state.decoded,
+    linkObs: state.linkObs,
     malformed: state.malformed,
     lastMsgAt: state.lastMsgAt,
+    regions: REGIONS,
   };
 }
 

@@ -223,9 +223,23 @@
         (d, t) => alive() && setProgress(0.35 + 0.35 * (d / Math.max(t, 1))));
       if (!alive()) return;
 
-      // calibrate the model against reported neighbour links (RF ground truth)
-      const calibration = Analysis.calibrate(nodes, opts);
+      // per-link SNR observations recorded by the server's MQTT listener
+      let linkObs = [];
+      try {
+        const or = await fetch('/api/linkobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: nodes.map((n) => n.id) }),
+        });
+        if (or.ok) linkObs = (await or.json()).obs || [];
+      } catch {}
+      if (!alive()) return;
+
+      // calibrate the model against RF ground truth: reported neighbour links
+      // plus accumulated gateway-reception observations
+      const calibration = Analysis.calibrate(nodes, opts, linkObs);
       opts.envLoss = calibration.envLoss ?? 0;
+      const heightEstimates = Analysis.estimateHeights(nodes, calibration.disagreements, opts);
 
       // 4) placement + role suggestions
       setStatus('Scoring candidate sites and roles…');
@@ -235,7 +249,11 @@
       if (!alive()) return;
       const roles = Analysis.suggestRoles(nodes, links, compOf, opts);
 
-      lastResult = { nodes, links, placements, roles, nComponents, compOf, bbox, opts, capped, topRegion, calibration, keepView };
+      lastResult = {
+        nodes, links, placements, roles, nComponents, compOf, bbox, opts,
+        capped, topRegion, calibration, keepView, heightEstimates,
+        obsByPair: new Map(linkObs.map((o) => [`${o.a}-${o.b}`, o])),
+      };
       render(lastResult, label);
       setProgress(null);
     } catch (e) {
@@ -876,14 +894,26 @@
         <div class="why">Terrain splits this mesh into ${nComponents} groups that likely can't hear each other. The starred sites below are chosen to bridge them.</div></div>`);
     }
 
+    // observation-driven height estimates take precedence over raw
+    // disagreement cards — they carry an actionable fix
+    const estimated = new Set((r.heightEstimates || []).map((e) => e.i));
+    (r.heightEstimates || []).forEach((e) => {
+      const n = nodes[e.i];
+      items.push(`<div class="sugg role-up" ${nodeRef(e.i)} data-est-asl="${e.asl}">
+        <div class="t"><span class="tag">HEIGHT EST</span>${escapeHtml(n.name)}: antenna likely ~${e.height} m above terrain</div>
+        <div class="why">Modeling this node at ${e.height} m AGL (&asymp;${e.asl} m ASL) makes ${e.fixes} of ${e.of} observed-but-model-blocked links viable (evidence: ${e.evidence} weighted receptions — the estimate sharpens as more accumulate). Click to open Adjust prefilled with the estimate, then Save to apply it for everyone.</div></div>`);
+    });
+
     const cal = r.calibration;
     if (cal) {
-      cal.disagreements.slice(0, 4).forEach((d) => {
-        const a = nodes[d.i], b = nodes[d.j];
-        items.push(`<div class="sugg congestion" ${nodeRef(d.i)}>
-          <div class="t"><span class="tag">CALIBRATE</span>${escapeHtml(a.name)} &harr; ${escapeHtml(b.name)}: heard, but model says blocked</div>
-          <div class="why">These nodes report hearing each other${d.snr != null ? ` (SNR ${d.snr} dB)` : ''} over ${(d.dist / 1000).toFixed(1)} km, but the terrain model says the path is blocked. One of them is probably higher (or elsewhere) than assumed — open it and use Adjust to correct its height/position.</div></div>`);
-      });
+      cal.disagreements
+        .filter((d) => !estimated.has(d.i) && !estimated.has(d.j))
+        .slice(0, 4).forEach((d) => {
+          const a = nodes[d.i], b = nodes[d.j];
+          items.push(`<div class="sugg congestion" ${nodeRef(d.i)}>
+            <div class="t"><span class="tag">CALIBRATE</span>${escapeHtml(a.name)} &harr; ${escapeHtml(b.name)}: heard, but model says blocked</div>
+            <div class="why">These nodes ${d.nObs ? `were directly heard by each other ${d.nObs} times` : 'report hearing each other'}${d.snr != null ? ` (SNR ${d.snr.toFixed ? d.snr.toFixed(1) : d.snr} dB)` : ''} over ${(d.dist / 1000).toFixed(1)} km, but the terrain model says the path is blocked. One of them is probably higher (or elsewhere) than assumed — open it and use Adjust to correct its height/position.</div></div>`);
+        });
     }
 
     placements.forEach((p, idx) => {
@@ -941,6 +971,12 @@
           : div.dataset.site != null ? siteMarkers[+div.dataset.site] : null;
         if (marker) marker.openPopup();
         if (div.dataset.node != null) selectNode(+div.dataset.node);
+        // height-estimate cards open the editor prefilled with the estimate
+        if (div.dataset.estAsl != null && div.dataset.node != null) {
+          openEditor(+div.dataset.node);
+          $('edit-unit').value = 'm';
+          $('edit-height').value = div.dataset.estAsl;
+        }
       });
     });
   }
@@ -1014,7 +1050,12 @@ ${wpts}
       if (d > opts.maxRange) continue;
       const r = Analysis.los(n.lat, n.lon, n.ant ?? opts.antenna,
         nodes[j].lat, nodes[j].lon, nodes[j].ant ?? opts.antenna, opts.zoom, opts.fGHz);
-      rows.push({ j, los: r, budget: Analysis.linkBudget(r, opts.fGHz, opts.envLoss || 0, opts.sens) });
+      const obKey = `${Math.min(n.id, nodes[j].id)}-${Math.max(n.id, nodes[j].id)}`;
+      rows.push({
+        j, los: r,
+        budget: Analysis.linkBudget(r, opts.fGHz, opts.envLoss || 0, opts.sens),
+        ob: lastResult.obsByPair.get(obKey) || null,
+      });
     }
     const order = { clear: 0, marginal: 1, blocked: 2 };
     rows.sort((a, b) => order[a.los.status] - order[b.los.status] || a.los.dist - b.los.dist);
@@ -1035,6 +1076,7 @@ ${wpts}
       `<div class="link-row" data-k="${k}">
         <span class="chip ${r.los.status}"></span>
         <span class="nm">${escapeHtml(nodes[r.j].name)}</span>
+        ${r.ob ? `<span class="obs-n" title="${r.ob.n} direct receptions observed, avg SNR ${r.ob.avgSnr.toFixed(1)} dB">${r.ob.n}&times;</span>` : ''}
         <span class="d">${(r.los.dist / 1000).toFixed(1)} km &middot; ${r.budget.margin >= 0 ? '+' : ''}${r.budget.margin.toFixed(0)} dB</span>
       </div>`).join('');
     list.scrollTop = 0;
@@ -1055,11 +1097,11 @@ ${wpts}
     await renderPairDetail(
       { name: a.name, short: a.short, lat: a.lat, lon: a.lon, ant: a.ant ?? opts.antenna },
       { name: b.name, short: b.short, lat: b.lat, lon: b.lon, ant: b.ant ?? opts.antenna },
-      opts);
+      opts, r.ob);
   }
 
   // Shared detail renderer: works for node pairs and arbitrary map points.
-  async function renderPairDetail(a, b, opts) {
+  async function renderPairDetail(a, b, opts, ob = null) {
     // fetch fine-grained tiles for just this corridor (up to ~10-20 m/px) and
     // compute the link at that resolution — sharper than the area-wide pass
     const pb = {
@@ -1088,6 +1130,10 @@ ${wpts}
       ['Fresnel (worst)', `${fresPct}% clear`],
       ['Diffraction loss', `${budget.diff.toFixed(1)} dB`],
       ...(budget.envLoss ? [['Env. loss (calibrated)', `${budget.envLoss.toFixed(1)} dB`]] : []),
+      ...(ob ? [
+        ['Observed receptions', `${ob.n} (90 d)`],
+        ['Observed SNR', `${ob.avgSnr.toFixed(1)} dB avg (${Math.round(ob.minSnr)}&hellip;${Math.round(ob.maxSnr)})`],
+      ] : []),
     ].map(([key, v]) => `<div class="kv-row"><span class="k">${key}</span><span class="v">${v}</span></div>`).join('');
 
     drawProfile($('profile-canvas'), prof, los.status);

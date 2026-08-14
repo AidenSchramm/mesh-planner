@@ -245,6 +245,15 @@ button.wide { width: 100%; margin-top: 10px; }
   width: 8px; height: 8px;
   border-radius: 50%;
 }
+.link-row .obs-n {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--clear);
+  background: #12331f88;
+  border-radius: 3px;
+  padding: 0 4px;
+}
 .chip.clear { background: var(--clear); }
 .chip.marginal { background: var(--marginal); }
 .chip.blocked { background: var(--blocked); }

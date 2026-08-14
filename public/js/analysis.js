@@ -138,7 +138,7 @@ const Analysis = (() => {
   // - envLoss: median gap between predicted RX and SNR-derived actual RX
   //   across observed links = local clutter loss (trees/buildings) the
   //   terrain-only model can't see.
-  function calibrate(nodes, opts) {
+  function calibrate(nodes, opts, extObs = []) {
     const { zoom, fGHz, antenna } = opts;
     const byId = new Map(nodes.map((n, i) => [n.id, i]));
     const pairs = new Map();
@@ -152,6 +152,18 @@ const Analysis = (() => {
         if (typeof nb.snr === 'number') pairs.get(key).snrs.push(nb.snr);
       }
     });
+    // merge stored per-link SNR observations (direct gateway receptions
+    // harvested from MQTT envelope metadata by the server)
+    for (const o of extObs) {
+      if (!o || o.n < 3) continue; // demand repeated receptions before trusting a pair
+      const i = byId.get(o.a), j = byId.get(o.b);
+      if (i == null || j == null || i === j) continue;
+      const key = `${Math.min(i, j)}-${Math.max(i, j)}`;
+      if (!pairs.has(key)) pairs.set(key, { i: Math.min(i, j), j: Math.max(i, j), snrs: [] });
+      const p = pairs.get(key);
+      if (typeof o.avgSnr === 'number') p.snrs.push(o.avgSnr);
+      p.nObs = (p.nObs || 0) + o.n;
+    }
 
     // LoRa RX estimate from SNR: thermal noise floor at 250 kHz + ~6 dB NF
     const NOISE_FLOOR = -114;
@@ -171,6 +183,7 @@ const Analysis = (() => {
       else disagreements.push({
         i: p.i, j: p.j, dist: r.dist,
         snr: p.snrs.length ? Math.max(...p.snrs) : null,
+        nObs: p.nObs || null,
       });
       // env-loss samples only from geometrically-viable links: blocked
       // disagreements are position/height errors, not clutter. LoRa SNR
@@ -322,6 +335,51 @@ const Analysis = (() => {
       if (rootChildren > 1) isAP[root] = true;
     }
     return isAP;
+  }
+
+  // Estimate real antenna heights from observed-but-model-blocked links: for
+  // each implicated node, find the smallest height AGL at which >=80% of its
+  // observed links become terrain-viable. Confidence grows with accumulated
+  // receptions, so estimates sharpen over time as the SNR store fills.
+  function estimateHeights(nodes, disagreements, opts) {
+    const byNode = new Map();
+    for (const d of disagreements) {
+      for (const [self, other] of [[d.i, d.j], [d.j, d.i]]) {
+        if (!byNode.has(self)) byNode.set(self, []);
+        byNode.get(self).push({ other, nObs: d.nObs || 1 });
+      }
+    }
+    const HEIGHTS = [5, 10, 15, 20, 30, 45, 60];
+    const out = [];
+    for (const [i, list] of byNode) {
+      const nd = nodes[i];
+      if (nd.mobile || /TRACKER/.test(nd.roleName || '')) continue;
+      if (nd.altOverride != null) continue; // already corrected by a human
+      // demand evidence: multiple blocked pairs, or one with many receptions
+      const evidence = list.reduce((s, x) => s + Math.min(x.nObs, 20), 0);
+      if (list.length < 2 && evidence < 10) continue;
+      const cur = nd.ant ?? opts.antenna;
+      let found = null;
+      for (const h of HEIGHTS) {
+        if (h <= cur) continue;
+        let fixed = 0;
+        for (const { other } of list) {
+          const o = nodes[other];
+          const r = los(nd.lat, nd.lon, h, o.lat, o.lon, o.ant ?? opts.antenna, opts.zoom, opts.fGHz);
+          if (r.status !== 'blocked') fixed++;
+        }
+        if (fixed >= Math.ceil(list.length * 0.8)) { found = { h, fixed }; break; }
+      }
+      if (found) {
+        const terrain = Elevation.elevationAt(nd.lat, nd.lon, opts.zoom);
+        out.push({
+          i, height: found.h, fixes: found.fixed, of: list.length,
+          asl: Math.round(terrain + found.h), evidence,
+        });
+      }
+    }
+    out.sort((a, b) => b.evidence - a.evidence);
+    return out.slice(0, 3);
   }
 
   // ---- placement suggestions ------------------------------------------------
@@ -551,5 +609,5 @@ const Analysis = (() => {
     return out;
   }
 
-  return { haversine, freqGHzForRegion, sensForPreset, los, profile, bearing, linkBudget, calibrate, buildLinks, components, suggestPlacements, suggestRoles, viewshed };
+  return { haversine, freqGHzForRegion, sensForPreset, los, profile, bearing, linkBudget, calibrate, estimateHeights, buildLinks, components, suggestPlacements, suggestRoles, viewshed };
 })();
