@@ -371,12 +371,29 @@ footer { margin-top: auto; padding: 4px 2px 2px; }
 footer p { margin: 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
 footer a { color: var(--accent); }
 
-/* ---- legend ---- */
-#legend {
+/* ---- bottom-left stack: cursor readout + legend ---- */
+#bl-stack {
   position: absolute;
   left: 14px;
   bottom: 26px;
   z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#cursor-info {
+  background: rgba(18, 22, 29, 0.94);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  min-width: 168px;
+}
+.ci-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 2px 0; }
+.ci-row .k { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
+.ci-row .v { font-family: Consolas, monospace; font-size: 11.5px; }
+
+#legend {
   background: rgba(18, 22, 29, 0.94);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -615,5 +632,5 @@ button.secondary.armed { border-color: #35d0e0; color: #35d0e0; }
   #sidebar { width: 100%; min-width: 0; height: 45%; border-left: none; border-top: 1px solid var(--border); }
   #map { height: 55%; }
   #search-float { width: calc(100% - 28px); }
-  #legend { display: none; }
+  #bl-stack { display: none; }
 }

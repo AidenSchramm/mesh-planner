@@ -101,5 +101,18 @@ const Elevation = (() => {
     return v < -1000 ? 0 : v; // guard against decode garbage
   }
 
-  return { pickZoom, prefetch, elevationAt };
+  // Is the tile covering this point already decoded in the cache?
+  function tileCached(lat, lon, zoom) {
+    const tx = Math.floor(lon2tileX(lon, zoom));
+    const ty = Math.floor(lat2tileY(lat, zoom));
+    const t = tiles.get(`${zoom}/${tx}/${ty}`);
+    return t !== undefined && t !== null;
+  }
+
+  // Fetch (and cache) the single tile covering a point.
+  function ensureTile(lat, lon, zoom) {
+    return fetchTile(zoom, Math.floor(lon2tileX(lon, zoom)), Math.floor(lat2tileY(lat, zoom)));
+  }
+
+  return { pickZoom, prefetch, elevationAt, tileCached, ensureTile };
 })();

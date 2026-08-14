@@ -6,6 +6,7 @@
   // zoom control bottom-right: top-left is occupied by the floating search box
   const map = L.map('map', { zoomControl: false }).setView([39.5, -98.35], 5);
   L.control.zoom({ position: 'bottomright' }).addTo(map);
+  window.__map = map; // debugging hook
 
   const baseDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 20, subdomains: 'abcd',
@@ -1390,6 +1391,71 @@ ${wpts}
       }
     }
   });
+
+  // ---- cursor terrain readout -----------------------------------------------
+
+  const ciBox = $('cursor-info');
+  let ciRaf = null;
+  let ciLast = null;
+  let ciFetchTimer = null;
+
+  // Height above average terrain: cursor elevation minus the mean of ring
+  // samples 1.5–6 km out (16 azimuths x 4 distances). Positive = local high spot.
+  function haatAt(lat, lon, zoom) {
+    const e = Elevation.elevationAt(lat, lon, zoom);
+    const mLat = 111320, mLon = 111320 * Math.cos((lat * Math.PI) / 180);
+    let sum = 0, n = 0;
+    for (let k = 0; k < 16; k++) {
+      const az = (2 * Math.PI * k) / 16;
+      for (const d of [1500, 3000, 4500, 6000]) {
+        const la = lat + (Math.cos(az) * d) / mLat;
+        const lo = lon + (Math.sin(az) * d) / mLon;
+        if (!Elevation.tileCached(la, lo, zoom)) continue;
+        sum += Elevation.elevationAt(la, lo, zoom);
+        n++;
+      }
+    }
+    return n >= 24 ? e - sum / n : null; // demand decent ring coverage
+  }
+
+  let ciLastRun = 0;
+
+  function refreshCursorInfo() {
+    ciRaf = null;
+    if (!ciLast) return;
+    const { lat, lng } = ciLast;
+    $('ci-coords').textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    const zoom = lastResult ? lastResult.opts.zoom : 12;
+    if (Elevation.tileCached(lat, lng, zoom)) {
+      $('ci-asl').textContent = `${Math.round(Elevation.elevationAt(lat, lng, zoom))} m`;
+      const h = haatAt(lat, lng, zoom);
+      $('ci-haat').textContent = h != null ? `${h >= 0 ? '+' : ''}${Math.round(h)} m` : '—';
+    } else {
+      $('ci-asl').textContent = '—';
+      $('ci-haat').textContent = '—';
+      // hovering outside loaded terrain: fetch that tile after a short pause
+      clearTimeout(ciFetchTimer);
+      ciFetchTimer = setTimeout(async () => {
+        await Elevation.ensureTile(lat, lng, zoom);
+        refreshCursorInfo();
+      }, 250);
+    }
+  }
+
+  map.on('mousemove', (e) => {
+    ciBox.classList.remove('hidden');
+    ciLast = e.latlng;
+    // synchronous with a light throttle (the lookup is microseconds); a
+    // trailing rAF catches the final resting position
+    const now = performance.now();
+    if (now - ciLastRun > 40) {
+      ciLastRun = now;
+      refreshCursorInfo();
+    } else if (!ciRaf) {
+      ciRaf = requestAnimationFrame(refreshCursorInfo);
+    }
+  });
+  map.on('mouseout', () => ciBox.classList.add('hidden'));
 
   // ---- events ---------------------------------------------------------------
 

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mesh Planner — Meshtastic terrain &amp; coverage analysis</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="styles.css?v=12">
+<link rel="stylesheet" href="styles.css?v=14">
 </head>
 <body>
 
@@ -34,6 +34,13 @@
     <div id="search-results" class="search-results hidden"></div>
   </div>
 
+  <div id="bl-stack">
+  <div id="cursor-info" class="hidden">
+    <div class="ci-row"><span class="k">Cursor</span><span class="v" id="ci-coords">&mdash;</span></div>
+    <div class="ci-row" title="Terrain elevation above sea level at the cursor"><span class="k">ASL</span><span class="v" id="ci-asl">&mdash;</span></div>
+    <div class="ci-row" title="Height above average terrain within ~6 km — positive means a local high spot"><span class="k">HAAT</span><span class="v" id="ci-haat">&mdash;</span></div>
+  </div>
+
   <div id="legend">
     <h3>Legend</h3>
     <div class="leg"><span class="dot role-client"></span> CLIENT</div>
@@ -45,6 +52,7 @@
     <div class="leg"><span class="line line-reported"></span> Reported RF neighbour</div>
     <div class="leg"><span class="dot suggest"></span> Suggested new node site</div>
     <div class="leg"><span class="vs-swatch"></span> Coverage viewshed (per node)</div>
+  </div>
   </div>
 
   <div id="whatif-panel" class="hidden">
@@ -203,8 +211,8 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="js/elevation.js?v=12"></script>
-<script src="js/analysis.js?v=12"></script>
-<script src="js/app.js?v=12"></script>
+<script src="js/elevation.js?v=14"></script>
+<script src="js/analysis.js?v=14"></script>
+<script src="js/app.js?v=14"></script>
 </body>
 </html>
