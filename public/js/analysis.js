@@ -111,11 +111,25 @@ const Analysis = (() => {
     return PRESET_SENS[preset] ?? -134; // LongFast default
   }
 
+  // Default TX power (dBm) inferred from the reported hardware model:
+  // Station-class boards carry power amplifiers; older SX1276-era boards top
+  // out at ~20 dBm; everything modern (SX1262-class) is 22 dBm. Regional
+  // legal limits cap the result.
+  function defaultTxDbm(hw, region) {
+    let max = 22;
+    if (hw) {
+      if (/STATION_G2/.test(hw)) max = 33;
+      else if (/STATION_G1/.test(hw)) max = 30;
+      else if (/TLORA_V1|TLORA_V2|TBEAM$|TBEAM_V0|HELTEC_V1|HELTEC_V2/.test(hw)) max = 20;
+    }
+    const cap = region === 'EU_868' ? 27 : region === 'EU_433' ? 10 : 30;
+    return Math.min(max, cap);
+  }
+
   // Rough LoRa link budget: free-space path loss + single knife-edge
   // diffraction at the worst obstruction + calibrated environment (clutter)
-  // loss. 22 dBm TX, 0 dBi net gains, preset-dependent sensitivity.
-  function linkBudget(losRes, fGHz, envLoss = 0, sens = -134) {
-    const TX_DBM = 22, SENS = sens;
+  // loss. TX power defaults to 22 dBm but is normally hardware-derived.
+  function linkBudget(losRes, fGHz, envLoss = 0, sens = -134, txDbm = 22, gains = 0) {
     const fspl = 32.44 + 20 * Math.log10(Math.max(losRes.dist, 50) / 1000) + 20 * Math.log10(fGHz * 1000);
     let diff = 0;
     if (losRes.worst < 0 && losRes.worstR1 > 0) {
@@ -125,10 +139,10 @@ const Analysis = (() => {
         diff = Math.max(0, 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1));
       }
     }
-    const rx = TX_DBM - fspl - diff - envLoss;
-    const margin = rx - SENS;
+    const rx = txDbm + gains - fspl - diff - envLoss;
+    const margin = rx - sens;
     const verdict = margin >= 10 ? 'likely' : margin >= 0 ? 'marginal' : 'unlikely';
-    return { fspl, diff, envLoss, rx, margin, verdict };
+    return { fspl, diff, envLoss, rx, margin, verdict, txDbm };
   }
 
   // Calibrate the model against reality using neighbour-info reports:
@@ -191,7 +205,9 @@ const Analysis = (() => {
       // saturates near +10 dB, so only unsaturated reports (snr <= 5) give a
       // usable RX estimate — strong links would fake a huge excess loss.
       if (p.snrs.length && r.status !== 'blocked') {
-        const pred = linkBudget(r, fGHz, 0);
+        // direction of each reception is unknown, so average the two ends' TX
+        const pred = linkBudget(r, fGHz, 0, -134,
+          ((a.txDbm ?? 22) + (b.txDbm ?? 22)) / 2, (a.antGain || 0) + (b.antGain || 0));
         for (const snr of p.snrs) {
           if (snr <= 5) excesses.push(pred.rx - (NOISE_FLOOR + snr));
         }
@@ -274,6 +290,98 @@ const Analysis = (() => {
         if (tanTerr > maxTan) maxTan = tanTerr;
       }
       if (runStart !== null) strokeRun(runStart, maxRange);
+      if (r % 90 === 89) {
+        if (onProgress) onProgress(r + 1, nRays);
+        await nextTick();
+      }
+    }
+    const bounds = [
+      [lat - maxRange / mLat, lon - maxRange / mLon],
+      [lat + maxRange / mLat, lon + maxRange / mLon],
+    ];
+    return { url: cv.toDataURL('image/png'), bounds, canvas: cv };
+  }
+
+  // RF coverage heatmap: like viewshed() but instead of binary visibility,
+  // each sample gets a predicted RX level — FSPL + single knife-edge
+  // diffraction over the ray's dominant obstruction + calibrated clutter
+  // loss — and is colored by margin band. Beyond-line-of-sight coverage
+  // (valleys behind gentle ridges) shows up correctly as usable/fringe.
+  const RF_BANDS = [
+    { minMargin: 20, color: 'rgba(61, 220, 132, 0.55)' },  // strong
+    { minMargin: 5, color: 'rgba(255, 179, 71, 0.5)' },    // usable
+    { minMargin: -8, color: 'rgba(255, 95, 86, 0.38)' },   // fringe (fade zone)
+  ];
+  // With no calibrated clutter loss, pure FSPL is wildly optimistic for
+  // ground-level receivers — assume a modest suburban baseline instead.
+  const RF_DEFAULT_CLUTTER = 10;
+
+  async function rfCoverage(lat, lon, antH, rxH, opts, onProgress) {
+    const { zoom, maxRange, fGHz, sens = -134, txDbm = 22 } = opts;
+    const envLoss = opts.envLoss > 0 ? opts.envLoss : RF_DEFAULT_CLUTTER;
+    const W = 440, half = W / 2;
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = W;
+    const ctx = cv.getContext('2d');
+    ctx.lineCap = 'round';
+    const mLat = 111320;
+    const mLon = 111320 * Math.cos((lat * Math.PI) / 180);
+    const h0 = Elevation.elevationAt(lat, lon, zoom) + antH;
+    const nRays = 720;
+    ctx.lineWidth = Math.max(2, (2 * Math.PI * half) / nRays + 0.6);
+    const stepLen = maxRange / half;
+    const lambda = 0.299792458 / fGHz; // meters
+    const fsplConst = 32.44 + 20 * Math.log10(fGHz * 1000);
+
+    for (let r = 0; r < nRays; r++) {
+      const az = (2 * Math.PI * r) / nRays;
+      const dx = Math.sin(az), dy = Math.cos(az);
+      let maxTan = -Infinity;
+      let domD = 0, domH = -Infinity; // dominant obstruction along this ray
+      let curBand = -1, runStart = 0;
+      const strokeRun = (from, to, band) => {
+        ctx.strokeStyle = RF_BANDS[band].color;
+        ctx.beginPath();
+        ctx.moveTo(half + (dx * from) / maxRange * half, half - (dy * from) / maxRange * half);
+        ctx.lineTo(half + (dx * to) / maxRange * half, half - (dy * to) / maxRange * half);
+        ctx.stroke();
+      };
+      let prevS = stepLen;
+      for (let s = stepLen; s <= maxRange; s += stepLen) {
+        const terr = Elevation.elevationAt(lat + (dy * s) / mLat, lon + (dx * s) / mLon, zoom);
+        const drop = (s * s) / (2 * R_EFF);
+        const tEff = terr - drop;
+        const rxE = tEff + rxH;
+        const fspl = fsplConst + 20 * Math.log10(s / 1000);
+        let diff = 0;
+        if ((rxE - h0) / s < maxTan) {
+          // receiver below the ray's horizon: knife-edge over dominant ridge
+          const d1 = domD, d2 = s - d1;
+          if (d1 > 1 && d2 > 1) {
+            const yline = h0 + ((rxE - h0) * d1) / s;
+            const hEdge = domH - yline;
+            if (hEdge > 0) {
+              const v = hEdge * Math.sqrt((2 * s) / (lambda * d1 * d2));
+              if (v > -0.78) {
+                diff = Math.max(0, 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1));
+              }
+            }
+          }
+        }
+        const margin = txDbm - fspl - diff - envLoss - sens;
+        const band = margin >= RF_BANDS[0].minMargin ? 0
+          : margin >= RF_BANDS[1].minMargin ? 1
+          : margin >= RF_BANDS[2].minMargin ? 2 : -1;
+        if (band !== curBand) {
+          if (curBand >= 0) strokeRun(runStart, prevS, curBand);
+          curBand = band;
+          runStart = s;
+        }
+        const tanTerr = (tEff - h0) / s;
+        if (tanTerr > maxTan) { maxTan = tanTerr; domD = s; domH = tEff; }
+        prevS = s;
+      }
+      if (curBand >= 0) strokeRun(runStart, maxRange, curBand);
       if (r % 90 === 89) {
         if (onProgress) onProgress(r + 1, nRays);
         await nextTick();
@@ -610,5 +718,5 @@ const Analysis = (() => {
     return out;
   }
 
-  return { haversine, freqGHzForRegion, sensForPreset, los, profile, bearing, linkBudget, calibrate, estimateHeights, buildLinks, components, suggestPlacements, suggestRoles, viewshed };
+  return { haversine, freqGHzForRegion, sensForPreset, defaultTxDbm, los, profile, bearing, linkBudget, calibrate, estimateHeights, buildLinks, components, suggestPlacements, suggestRoles, viewshed, rfCoverage };
 })();

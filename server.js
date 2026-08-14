@@ -357,6 +357,16 @@ function validOverride(o) {
     out.lat = lat; out.lon = lon;
   }
   if (o.mobile === true) out.mobile = true; // community "this node moves" flag
+  if (o.txp != null) {
+    const txp = Number(o.txp);
+    if (!Number.isFinite(txp) || txp < 1 || txp > 40) return null;
+    out.txp = txp;
+  }
+  if (o.gain != null) {
+    const gain = Number(o.gain);
+    if (!Number.isFinite(gain) || gain < -10 || gain > 20) return null;
+    out.gain = gain;
+  }
   return Object.keys(out).length ? out : null;
 }
 
@@ -402,7 +412,7 @@ async function handleOverrides(req, res, url) {
     let body;
     try { body = JSON.parse(await readBody(req)); } catch { return sendJson(req, res, { error: 'bad JSON' }, 400); }
     const clean = validOverride(body || {});
-    if (!clean) return sendJson(req, res, { error: 'override must contain valid alt and/or lat+lon' }, 400);
+    if (!clean) return sendJson(req, res, { error: 'override must contain valid alt, lat+lon, mobile, txp (1-40 dBm), and/or gain (-10..20 dBi)' }, 400);
     clean.updatedAt = new Date().toISOString();
     overrides[id] = clean;
     saveOverridesFile();

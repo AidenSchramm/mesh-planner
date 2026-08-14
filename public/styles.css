@@ -448,6 +448,7 @@ footer a { color: var(--accent); }
 .line-marginal { border-top: 3px dashed var(--marginal); }
 .line-reported { border-top: 3px dotted #4da3ff; }
 .vs-swatch { width: 11px; height: 11px; display: inline-block; background: rgba(30, 165, 90, 0.55); border: 1px solid #1e9e50; border-radius: 2px; }
+.rf-swatch { width: 11px; height: 11px; display: inline-block; background: linear-gradient(90deg, #3ddc84, #ffb347, #ff5f56); border: 1px solid #ffffff33; border-radius: 2px; }
 
 /* ---- edit panel ---- */
 #edit-panel {

@@ -148,6 +148,8 @@
       if (o.lat != null && o.lon != null) { n.lat = o.lat; n.lon = o.lon; }
       if (o.alt != null) n.altOverride = o.alt;
       if (o.mobile === true) { n.mobile = true; n.mobileManual = true; }
+      if (o.txp != null) n.txpOverride = o.txp;
+      if (o.gain != null) n.gainOverride = o.gain;
       n.adjusted = true;
     }
   }
@@ -213,11 +215,14 @@
       const topPreset = Object.entries(presetCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'LONG_FAST';
       const fGHz = Analysis.freqGHzForRegion(topRegion);
       const opts = { maxRange, antenna, zoom, fGHz, sens: Analysis.sensForPreset(topPreset), topPreset };
-      // effective antenna height AGL: corrected height ASL minus terrain, else global default
+      // effective antenna height AGL: corrected height ASL minus terrain, else global default;
+      // TX power from community override or hardware-model default; antenna gain from override
       nodes.forEach((n) => {
         n.ant = n.altOverride != null
           ? Math.max(1, n.altOverride - Elevation.elevationAt(n.lat, n.lon, zoom))
           : antenna;
+        n.txDbm = n.txpOverride ?? Analysis.defaultTxDbm(n.hw, n.region);
+        n.antGain = n.gainOverride ?? 0;
       });
 
       setStatus('Computing line-of-sight between node pairs…');
@@ -292,6 +297,7 @@
   const SLIDERS_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="6" r="2.7" fill="#171c25" stroke="currentColor" stroke-width="2"/><circle cx="15.5" cy="12" r="2.7" fill="#171c25" stroke="currentColor" stroke-width="2"/><circle cx="7" cy="18" r="2.7" fill="#171c25" stroke="currentColor" stroke-width="2"/></svg>';
   const POWER_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
   const PIN_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 21s-7-7.1-7-11.5a7 7 0 1 1 14 0C19 13.9 12 21 12 21z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 6.5v6M9 9.5h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  const RADIO_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="13" r="2" fill="currentColor"/><path d="M8.5 9.5a5 5 0 0 1 7 0M6 7a8.5 8.5 0 0 1 12 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 15v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
   // Popup card for a suggested new-node site — same style as node popups.
   function sitePopup(p, idx) {
@@ -333,7 +339,17 @@
         tip: 'Fraction of recent server samples where this node was actively reporting',
       });
     }
+    if (n.txDbm != null) {
+      tiles.push({
+        v: `${n.txDbm}${n.antGain ? '+' + n.antGain : ''} dBm`, k: 'TX est',
+        hl: n.txpOverride != null,
+        tip: n.txpOverride != null
+          ? 'TX power set by the community (Adjust)'
+          : `TX power inferred from hardware model${n.hw ? ` (${n.hw})` : ''} — override in Adjust if known`,
+      });
+    }
     const vsOn = activeViewsheds.has('n' + i);
+    const rfOn = activeViewsheds.has('r' + i);
     return `<div class="np">
       <div class="np-head">
         <span class="np-name">${escapeHtml(n.name)}</span>
@@ -346,8 +362,9 @@
       <div class="np-tiles">${tiles.map((t) =>
         `<div class="np-tile${t.hl ? ' hl' : ''}" title="${t.tip}"><div class="v">${t.v}</div><div class="k">${t.k}</div></div>`).join('')}</div>
       <div class="np-actions">
-        <button class="np-icon vs-btn${vsOn ? ' on' : ''}" data-key="n${i}" title="${vsOn ? 'Hide' : 'Show'} coverage viewshed">${EYE_SVG}</button>
-        <button class="np-icon adj-btn" data-i="${i}" title="Adjust height / position">${SLIDERS_SVG}</button>
+        <button class="np-icon vs-btn${vsOn ? ' on' : ''}" data-key="n${i}" title="${vsOn ? 'Hide' : 'Show'} line-of-sight viewshed">${EYE_SVG}</button>
+        <button class="np-icon vs-btn${rfOn ? ' on' : ''}" data-key="r${i}" title="${rfOn ? 'Hide' : 'Show'} RF signal coverage (predicted margin bands)">${RADIO_SVG}</button>
+        <button class="np-icon adj-btn" data-i="${i}" title="Adjust height / position / radio">${SLIDERS_SVG}</button>
         <button class="np-icon danger sim-btn${offlineSet.has(i) ? ' on' : ''}" data-i="${i}" title="${offlineSet.has(i) ? 'Restore node in simulation' : 'Simulate this node going offline'}">${POWER_SVG}</button>
       </div>
     </div>`;
@@ -490,7 +507,7 @@
     }
     list.innerHTML = [...activeViewsheds.entries()].map(([key, v]) =>
       `<div class="vs-row ${v.visible ? '' : 'off'}" data-key="${key}">
-        <span class="vs-color" style="background:${v.color || '#1e9e50'}"></span>
+        <span class="vs-color" style="background:${v.rf ? 'linear-gradient(90deg,#3ddc84,#ffb347,#ff5f56)' : (v.color || '#1e9e50')}"></span>
         <span class="nm" title="${escapeHtml(v.name)}">${escapeHtml(v.name)}</span>
         <button class="icon-btn vs-eye" title="${v.visible ? 'Hide' : 'Show'}">${v.visible ? EYE_SVG : EYE_OFF_SVG}</button>
         <button class="icon-btn vs-x" title="Remove">&#10005;</button>
@@ -527,9 +544,16 @@
   function viewshedTarget(key) {
     if (!lastResult) return null;
     const idx = parseInt(key.slice(1), 10);
-    if (key[0] === 'n') {
+    if (key[0] === 'n' || key[0] === 'r') {
       const n = lastResult.nodes[idx];
-      return n && { lat: n.lat, lon: n.lon, ant: n.ant ?? lastResult.opts.antenna, name: n.name, marker: nodeMarkers[idx] };
+      if (!n) return null;
+      return {
+        lat: n.lat, lon: n.lon, ant: n.ant ?? lastResult.opts.antenna,
+        name: key[0] === 'r' ? `${n.name} (RF)` : n.name,
+        marker: nodeMarkers[idx],
+        rf: key[0] === 'r',
+        txDbm: (n.txDbm ?? 22) + (n.antGain || 0),
+      };
     }
     if (key[0] === 's') {
       const p = lastResult.placements[idx];
@@ -556,42 +580,46 @@
       minLat: t.lat - opts.maxRange / mLat, maxLat: t.lat + opts.maxRange / mLat,
       minLon: t.lon - opts.maxRange / mLon, maxLon: t.lon + opts.maxRange / mLon,
     };
-    setStatus(`Computing coverage viewshed for ${t.name}…`);
+    setStatus(`Computing ${t.rf ? 'RF signal coverage' : 'coverage viewshed'} for ${t.name}…`);
     // finer terrain zoom over the (smaller) viewshed circle than the area pass
     const vz = Elevation.pickZoom(vb, 110, 13);
-    const color = nextViewshedColor();
+    const color = t.rf ? null : nextViewshedColor();
     await Elevation.prefetch(vb, vz, (d, t2) => setProgress(0.5 * (d / t2)));
-    const vs = await Analysis.viewshed(t.lat, t.lon, t.ant, 2,
-      { ...opts, zoom: vz, vsColor: hexToRgba(color, 0.55) },
-      (d, t2) => setProgress(0.5 + 0.5 * (d / t2)));
+    const vs = t.rf
+      ? await Analysis.rfCoverage(t.lat, t.lon, t.ant, 2,
+          { ...opts, zoom: vz, txDbm: t.txDbm },
+          (d, t2) => setProgress(0.5 + 0.5 * (d / t2)))
+      : await Analysis.viewshed(t.lat, t.lon, t.ant, 2,
+          { ...opts, zoom: vz, vsColor: hexToRgba(color, 0.55) },
+          (d, t2) => setProgress(0.5 + 0.5 * (d / t2)));
     const overlay = L.imageOverlay(vs.url, vs.bounds, { opacity: 1, interactive: false });
     overlay.addTo(viewshedLayer);
     const vctx = vs.canvas.getContext('2d');
     activeViewsheds.set(key, {
       overlay, visible: true, bounds: vs.bounds,
       imgData: vctx.getImageData(0, 0, vs.canvas.width, vs.canvas.height),
-      name: t.name, lat: t.lat, lon: t.lon, marker: t.marker, color,
+      name: t.name, lat: t.lat, lon: t.lon, marker: t.marker, color, rf: !!t.rf,
     });
     renderViewshedList();
     setProgress(null);
-    setStatus(`Viewshed for ${t.name}: green = terrain-clear coverage to a receiver at 2 m.`);
+    setStatus(t.rf
+      ? `RF coverage for ${t.name}: green ≥20 dB margin, amber usable, red fringe (2 m receiver, ${t.txDbm} dBm TX, ` +
+        `${opts.envLoss > 0 ? `${opts.envLoss.toFixed(0)} dB calibrated` : 'assumed 10 dB'} clutter loss).`
+      : `Viewshed for ${t.name}: terrain-clear line of sight to a receiver at 2 m.`);
   }
 
   map.on('popupopen', (e) => {
     const el = e.popup.getElement();
     if (!el) return;
-    const btn = el.querySelector('.vs-btn:not(.adj-btn)');
-    if (btn) {
+    el.querySelectorAll('.vs-btn[data-key]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const key = btn.dataset.key;
         btn.disabled = true;
         await toggleViewshed(key);
         btn.disabled = false;
-        const on = activeViewsheds.has(key);
-        btn.classList.toggle('on', on);
-        btn.title = `${on ? 'Hide' : 'Show'} coverage viewshed`;
+        btn.classList.toggle('on', activeViewsheds.has(key));
       });
-    }
+    });
     const plan = el.querySelector('.plan-btn');
     if (plan) {
       plan.addEventListener('click', () => {
@@ -643,6 +671,10 @@
     $('edit-unit').value = 'm';
     $('edit-height').value = altM != null ? Math.round(altM) : '';
     $('edit-mobile').checked = loadOverrides()[n.id]?.mobile === true;
+    const ov = loadOverrides()[n.id] || {};
+    $('edit-txp').value = ov.txp ?? '';
+    $('edit-txp').placeholder = `auto (${Analysis.defaultTxDbm(n.hw, n.region)})`;
+    $('edit-gain').value = ov.gain ?? '';
     setCoordsInput(n.lat, n.lon);
     marker.on('drag', () => {
       editState.posDirty = true;
@@ -671,6 +703,8 @@
       if (e.alt != null) parts.push(`${Math.round(e.alt)} m`);
       if (e.lat != null) parts.push(`${e.lat.toFixed(4)}, ${e.lon.toFixed(4)}`);
       if (e.mobile) parts.push('mobile');
+      if (e.txp != null) parts.push(`${e.txp} dBm`);
+      if (e.gain != null) parts.push(`${e.gain} dBi`);
       return `<div class="eh-row" data-k="${k}" title="Click to restore these values into the form">${when} &middot; ${parts.join(' &middot; ')}</div>`;
     }).join('');
     list.querySelectorAll('.eh-row:not(.muted)').forEach((row) => {
@@ -724,6 +758,10 @@
     const o = {};
     if (alt != null) o.alt = alt;
     if ($('edit-mobile').checked) o.mobile = true;
+    const txp = parseFloat($('edit-txp').value);
+    if (Number.isFinite(txp)) o.txp = txp;
+    const gain = parseFloat($('edit-gain').value);
+    if (Number.isFinite(gain)) o.gain = gain;
     if (editState.posDirty) { o.lat = p.lat; o.lon = p.lng; }
     else if (n.adjusted) {
       // keep a previously saved position override
@@ -1217,7 +1255,8 @@ ${wpts}
       const obKey = `${Math.min(n.id, nodes[j].id)}-${Math.max(n.id, nodes[j].id)}`;
       rows.push({
         j, los: r,
-        budget: Analysis.linkBudget(r, opts.fGHz, opts.envLoss || 0, opts.sens),
+        budget: Analysis.linkBudget(r, opts.fGHz, opts.envLoss || 0, opts.sens,
+          n.txDbm ?? 22, (n.antGain || 0) + (nodes[j].antGain || 0)),
         ob: lastResult.obsByPair.get(obKey) || null,
       });
     }
@@ -1259,8 +1298,8 @@ ${wpts}
     $('link-list').querySelectorAll('.link-row').forEach((el) => el.classList.remove('active'));
     if (rowEl) rowEl.classList.add('active');
     await renderPairDetail(
-      { name: a.name, short: a.short, lat: a.lat, lon: a.lon, ant: a.ant ?? opts.antenna },
-      { name: b.name, short: b.short, lat: b.lat, lon: b.lon, ant: b.ant ?? opts.antenna },
+      { name: a.name, short: a.short, lat: a.lat, lon: a.lon, ant: a.ant ?? opts.antenna, txDbm: a.txDbm, gain: a.antGain },
+      { name: b.name, short: b.short, lat: b.lat, lon: b.lon, ant: b.ant ?? opts.antenna, gain: b.antGain },
       opts, r.ob);
   }
 
@@ -1275,7 +1314,8 @@ ${wpts}
     const pz = Elevation.pickZoom(pb, 110, 14);
     await Elevation.prefetch(pb, pz);
     const los = Analysis.los(a.lat, a.lon, a.ant, b.lat, b.lon, b.ant, pz, opts.fGHz);
-    const budget = Analysis.linkBudget(los, opts.fGHz, opts.envLoss || 0, opts.sens);
+    const budget = Analysis.linkBudget(los, opts.fGHz, opts.envLoss || 0, opts.sens,
+      a.txDbm ?? 22, (a.gain || 0) + (b.gain || 0));
     const prof = Analysis.profile(a.lat, a.lon, a.ant, b.lat, b.lon, b.ant, pz, opts.fGHz);
     const st = $('link-status');
     st.className = 'link-status ' +

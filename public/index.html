@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mesh Planner — Meshtastic terrain &amp; coverage analysis</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="styles.css?v=17">
+<link rel="stylesheet" href="styles.css?v=19">
 </head>
 <body>
 
@@ -52,6 +52,7 @@
     <div class="leg"><span class="line line-reported"></span> Reported RF neighbour</div>
     <div class="leg"><span class="dot suggest"></span> Suggested new node site</div>
     <div class="leg"><span class="vs-swatch"></span> Coverage viewshed (color per node)</div>
+    <div class="leg"><span class="rf-swatch"></span> RF coverage (strong &rarr; fringe)</div>
   </div>
   </div>
 
@@ -90,6 +91,14 @@
     <label class="edit-field">Position (lat, lon)
       <input id="edit-coords" type="text" spellcheck="false">
     </label>
+    <div class="row opts">
+      <label class="edit-field">TX power (dBm)
+        <input id="edit-txp" type="number" step="1" min="1" max="40" placeholder="auto">
+      </label>
+      <label class="edit-field">Ant. gain (dBi)
+        <input id="edit-gain" type="number" step="0.5" min="-10" max="20" placeholder="0">
+      </label>
+    </div>
     <label class="edit-check" title="Marks the position as a snapshot of a moving node — excludes it from model calibration, height estimates, and role suggestions">
       <input type="checkbox" id="edit-mobile"> Mobile node (location is a snapshot)
     </label>
@@ -223,8 +232,8 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="js/elevation.js?v=17"></script>
-<script src="js/analysis.js?v=17"></script>
-<script src="js/app.js?v=17"></script>
+<script src="js/elevation.js?v=19"></script>
+<script src="js/analysis.js?v=19"></script>
+<script src="js/app.js?v=19"></script>
 </body>
 </html>
