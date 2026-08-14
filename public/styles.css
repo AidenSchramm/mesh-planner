@@ -312,6 +312,12 @@ button.wide { width: 100%; margin-top: 10px; }
   font-size: 12.5px;
 }
 .vs-row:last-child { border-bottom: none; }
+.vs-row .vs-color {
+  flex-shrink: 0;
+  width: 10px; height: 10px;
+  border-radius: 3px;
+  border: 1px solid #ffffff33;
+}
 .vs-row .nm {
   flex: 1;
   cursor: pointer;

@@ -417,6 +417,19 @@
     applyFailureSim();
   }
 
+  // distinct per-viewshed colors (colorblind-aware ordering); freed on remove
+  const VS_COLORS = ['#3ddc84', '#35d0e0', '#c290ff', '#ffb347', '#ff6ea8', '#f5e663'];
+
+  function hexToRgba(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+
+  function nextViewshedColor() {
+    const used = new Set([...activeViewsheds.values()].map((v) => v.color));
+    return VS_COLORS.find((c) => !used.has(c)) || VS_COLORS[activeViewsheds.size % VS_COLORS.length];
+  }
+
   const EYE_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="2"/></svg>';
   const EYE_OFF_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" opacity="0.45"/><path d="M4 3.5 20.5 20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
@@ -445,6 +458,16 @@
     return Math.round((covered / (G * G)) * 100);
   }
 
+  // Hovering a viewshed row isolates it: full opacity for the hovered one,
+  // heavy dim for the rest. key=null restores everyone.
+  function isolateViewshed(key) {
+    for (const [k, v] of activeViewsheds) {
+      if (!v.visible) continue;
+      v.overlay.setOpacity(key == null || k === key ? 1 : 0.12);
+      if (k === key) v.overlay.bringToFront();
+    }
+  }
+
   function renderViewshedList() {
     const panel = $('viewshed-panel');
     const list = $('viewshed-list');
@@ -466,12 +489,15 @@
     }
     list.innerHTML = [...activeViewsheds.entries()].map(([key, v]) =>
       `<div class="vs-row ${v.visible ? '' : 'off'}" data-key="${key}">
+        <span class="vs-color" style="background:${v.color || '#1e9e50'}"></span>
         <span class="nm" title="${escapeHtml(v.name)}">${escapeHtml(v.name)}</span>
         <button class="icon-btn vs-eye" title="${v.visible ? 'Hide' : 'Show'}">${v.visible ? EYE_SVG : EYE_OFF_SVG}</button>
         <button class="icon-btn vs-x" title="Remove">&#10005;</button>
       </div>`).join('');
     list.querySelectorAll('.vs-row').forEach((row) => {
       const key = row.dataset.key;
+      row.addEventListener('mouseenter', () => isolateViewshed(key));
+      row.addEventListener('mouseleave', () => isolateViewshed(null));
       row.querySelector('.nm').addEventListener('click', () => {
         const v = activeViewsheds.get(key);
         if (!v) return;
@@ -532,16 +558,18 @@
     setStatus(`Computing coverage viewshed for ${t.name}…`);
     // finer terrain zoom over the (smaller) viewshed circle than the area pass
     const vz = Elevation.pickZoom(vb, 110, 13);
+    const color = nextViewshedColor();
     await Elevation.prefetch(vb, vz, (d, t2) => setProgress(0.5 * (d / t2)));
     const vs = await Analysis.viewshed(t.lat, t.lon, t.ant, 2,
-      { ...opts, zoom: vz }, (d, t2) => setProgress(0.5 + 0.5 * (d / t2)));
+      { ...opts, zoom: vz, vsColor: hexToRgba(color, 0.55) },
+      (d, t2) => setProgress(0.5 + 0.5 * (d / t2)));
     const overlay = L.imageOverlay(vs.url, vs.bounds, { opacity: 1, interactive: false });
     overlay.addTo(viewshedLayer);
     const vctx = vs.canvas.getContext('2d');
     activeViewsheds.set(key, {
       overlay, visible: true, bounds: vs.bounds,
       imgData: vctx.getImageData(0, 0, vs.canvas.width, vs.canvas.height),
-      name: t.name, lat: t.lat, lon: t.lon, marker: t.marker,
+      name: t.name, lat: t.lat, lon: t.lon, marker: t.marker, color,
     });
     renderViewshedList();
     setProgress(null);
@@ -1425,7 +1453,9 @@ ${wpts}
     setStatus('Computing coverage for the hypothetical node…');
     const vz = Elevation.pickZoom(vb, 110, 13);
     await Elevation.prefetch(vb, vz, (d, t) => setProgress(0.5 * (d / t)));
-    const vs = await Analysis.viewshed(p.lat, p.lng, mast, 2, { ...opts, zoom: vz },
+    // cyan to match the hypothetical-node pin
+    const vs = await Analysis.viewshed(p.lat, p.lng, mast, 2,
+      { ...opts, zoom: vz, vsColor: 'rgba(53, 208, 224, 0.5)' },
       (d, t) => setProgress(0.5 + 0.5 * (d / t)));
     setProgress(null);
     if (!whatif) return;

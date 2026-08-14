@@ -244,7 +244,7 @@ const Analysis = (() => {
     const cv = document.createElement('canvas');
     cv.width = W; cv.height = W;
     const ctx = cv.getContext('2d');
-    ctx.strokeStyle = 'rgba(30, 165, 90, 0.55)';
+    ctx.strokeStyle = opts.vsColor || 'rgba(30, 165, 90, 0.55)';
     ctx.lineCap = 'round';
     const mLat = 111320;
     const mLon = 111320 * Math.cos((lat * Math.PI) / 180);
