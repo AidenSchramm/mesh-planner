@@ -356,6 +356,7 @@ function validOverride(o) {
       Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
     out.lat = lat; out.lon = lon;
   }
+  if (o.mobile === true) out.mobile = true; // community "this node moves" flag
   return Object.keys(out).length ? out : null;
 }
 

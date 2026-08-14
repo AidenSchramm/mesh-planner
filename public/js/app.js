@@ -147,6 +147,7 @@
       if (!o) continue;
       if (o.lat != null && o.lon != null) { n.lat = o.lat; n.lon = o.lon; }
       if (o.alt != null) n.altOverride = o.alt;
+      if (o.mobile === true) { n.mobile = true; n.mobileManual = true; }
       n.adjusted = true;
     }
   }
@@ -641,6 +642,7 @@
     const altM = n.altOverride ?? n.alt;
     $('edit-unit').value = 'm';
     $('edit-height').value = altM != null ? Math.round(altM) : '';
+    $('edit-mobile').checked = loadOverrides()[n.id]?.mobile === true;
     setCoordsInput(n.lat, n.lon);
     marker.on('drag', () => {
       editState.posDirty = true;
@@ -668,6 +670,7 @@
       const parts = [];
       if (e.alt != null) parts.push(`${Math.round(e.alt)} m`);
       if (e.lat != null) parts.push(`${e.lat.toFixed(4)}, ${e.lon.toFixed(4)}`);
+      if (e.mobile) parts.push('mobile');
       return `<div class="eh-row" data-k="${k}" title="Click to restore these values into the form">${when} &middot; ${parts.join(' &middot; ')}</div>`;
     }).join('');
     list.querySelectorAll('.eh-row:not(.muted)').forEach((row) => {
@@ -720,6 +723,7 @@
     const p = editState.marker.getLatLng();
     const o = {};
     if (alt != null) o.alt = alt;
+    if ($('edit-mobile').checked) o.mobile = true;
     if (editState.posDirty) { o.lat = p.lat; o.lon = p.lng; }
     else if (n.adjusted) {
       // keep a previously saved position override
@@ -1096,7 +1100,9 @@ ${wpts}
     // movement / stability
     if (n.mobile || /TRACKER/.test(n.roleName || '')) {
       add('warn', 'Mobile node',
-        'Position hops between server samples — the shown location is a snapshot. Excluded from calibration and role suggestions.');
+        n.mobileManual
+          ? 'Flagged as mobile by the community — the shown location is a snapshot. Excluded from calibration and role suggestions.'
+          : 'Position hops between server samples — the shown location is a snapshot. Excluded from calibration and role suggestions.');
     } else if ((n.relSamples || 0) >= 5) {
       add('ok', 'Position stable', `No significant movement across ${n.relSamples} server samples.`);
     } else {

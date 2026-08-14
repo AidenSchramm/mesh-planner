@@ -469,6 +469,16 @@ footer a { color: var(--accent); }
 #edit-panel .edit-field .row { margin-top: 0; }
 #edit-panel #edit-unit { width: 56px; }
 #edit-panel .hint { font-size: 11px; color: var(--marginal); margin: 0 0 8px; line-height: 1.4; }
+#edit-panel .edit-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+#edit-panel .edit-check input { width: auto; accent-color: var(--accent); }
 #edit-panel button { font-size: 12px; padding: 6px 10px; }
 
 #edit-history { margin-bottom: 8px; }
