@@ -1,0 +1,5 @@
+# runtime data: corrections, history, reliability, caches, tile store
+data/
+
+# local backups
+*.tgz

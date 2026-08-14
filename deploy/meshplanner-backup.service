@@ -1,0 +1,8 @@
+[Unit]
+Description=Mesh Planner data backup (corrections + history + reliability)
+
+[Service]
+Type=oneshot
+User=meshplanner
+Group=meshplanner
+ExecStart=/bin/bash -c 'mkdir -p /var/lib/meshplanner/backups && tar czf /var/lib/meshplanner/backups/meshplanner-$(date +%%Y%%m%%d).tgz --ignore-failed-read -C /var/lib/meshplanner overrides.json history.jsonl reliability.json geocode-cache.json; ls -1t /var/lib/meshplanner/backups/*.tgz 2>/dev/null | tail -n +15 | xargs -r rm'

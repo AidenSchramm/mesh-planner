@@ -1,0 +1,6 @@
+# Replace mesh.example.com with your domain (A record pointing at the VPS).
+# Caddy obtains and renews the TLS certificate automatically.
+mesh.example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8620
+}

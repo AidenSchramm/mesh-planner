@@ -1,0 +1,25 @@
+[Unit]
+Description=Mesh Planner (Meshtastic terrain & coverage analysis)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=meshplanner
+Group=meshplanner
+WorkingDirectory=/opt/meshplanner
+ExecStart=/usr/bin/node /opt/meshplanner/server.js
+Environment=PORT=8620
+Environment=DATA_DIR=/var/lib/meshplanner
+Restart=always
+RestartSec=5
+
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/meshplanner
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
