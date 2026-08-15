@@ -1,0 +1,14 @@
+services:
+  meshplanner:
+    build: .
+    ports:
+      - "8620:8620"
+    volumes:
+      - meshplanner-data:/data
+    environment:
+      # comma-separated region trees for link-observation ingest, e.g. US,EU_868
+      MQTT_REGIONS: US
+    restart: unless-stopped
+
+volumes:
+  meshplanner-data:

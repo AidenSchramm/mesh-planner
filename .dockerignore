@@ -1,0 +1,7 @@
+data/
+.git/
+.claude/
+*.tgz
+deploy/
+DEPLOY.md
+README.md

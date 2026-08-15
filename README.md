@@ -7,14 +7,36 @@ analyze a mesh network in any area and suggest improvements — in the spirit of
 
 ## Run
 
+No npm install, no build step — the server has zero dependencies:
+
 ```
 node server.js
 ```
 
-Then open http://localhost:8620. Requires Node 18+ (no npm dependencies).
+Then open http://localhost:8620. **Node 22.5+ recommended** (the per-link SNR
+observation store uses the built-in `node:sqlite`; on older Node ≥18 everything
+else works and observations are disabled with a warning).
+
+Or with Docker (pins the right Node, persists data in a volume):
+
+```
+docker compose up -d
+```
 
 Type a city, ZIP code, address, or raw `lat, lon` coordinates and hit **Go**, or pan the
 map and click **Analyze current map view**.
+
+### Configuration (environment variables)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8620` | HTTP listen port |
+| `DATA_DIR` | `./data` | Corrections, history, reliability, caches, SQLite store |
+| `MQTT_REGIONS` | `US` | Comma-separated region trees to ingest for link observations (bandwidth scales with this) |
+| `MQTT_HOST` | `mqtt.meshtastic.org` | MQTT broker for live map reports / observations |
+| `MQTT_DISABLE` | unset | Set `1` to disable the MQTT listener entirely |
+
+For a production deployment (systemd + Caddy HTTPS on a VPS), see [DEPLOY.md](DEPLOY.md).
 
 ## What it does
 

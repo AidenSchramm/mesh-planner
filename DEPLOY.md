@@ -3,6 +3,13 @@
 The app is a single zero-dependency Node server; the smallest Vultr instance is
 plenty. Total cost: ~$5–6/month + a domain (optional but recommended for HTTPS).
 
+This guide uses systemd + Caddy directly (what mesh.womod.org runs).
+**Docker alternative:** `docker compose up -d` with the included Dockerfile
+does the same thing in one command — put Caddy or any reverse proxy in front
+and mount/back up the `meshplanner-data` volume instead of `/var/lib/meshplanner`.
+(Note: the Docker path is provided as a convenience and hasn't been exercised
+in this deployment.)
+
 ## 1. Create the instance
 
 1. Vultr → Deploy New Server → **Cloud Compute — Shared CPU**.
