@@ -170,17 +170,30 @@ function slimPotatoNode(n, srcLabel) {
   };
 }
 
-// Overlay a fresher record onto an existing one, keeping rich fields
-// (neighbours, utilization, battery) the fresher source doesn't carry.
+// Merge an extra-source record onto an aggregate one, by field group.
+// Regional servers hear nodes constantly (fresh last_heard) but may cache
+// months-old names and positions — so "newest activity" must NOT overlay
+// everything. Position only moves forward with a newer position timestamp;
+// identity and rich fields stay with the aggregate record and are used only
+// to fill gaps.
 function mergeFresher(cur, nu) {
-  const nuNewer = !cur.updAt || (nu.updAt && Date.parse(nu.updAt) > Date.parse(cur.updAt));
-  if (!nuNewer) return cur;
   const out = { ...cur };
-  for (const [k, v] of Object.entries(nu)) {
-    if (v != null) out[k] = v;
+  // liveness: most recent activity wins
+  if (nu.updAt && (!cur.updAt || Date.parse(nu.updAt) > Date.parse(cur.updAt))) {
+    out.updAt = nu.updAt;
   }
-  out.neighbours = cur.neighbours ?? null;
-  out.util = cur.util; out.airTx = cur.airTx; out.battery = cur.battery;
+  // position group: wins wholesale only if the position itself is newer
+  if (nu.posAt && (!cur.posAt || Date.parse(nu.posAt) > Date.parse(cur.posAt))) {
+    out.lat = nu.lat;
+    out.lon = nu.lon;
+    out.posAt = nu.posAt;
+    if (nu.alt != null) out.alt = nu.alt;
+    if (nu.prec != null) out.prec = nu.prec;
+  }
+  // everything else: fill gaps only
+  for (const k of ['roleName', 'hw', 'fw', 'region', 'preset', 'util', 'airTx', 'battery', 'prec', 'alt']) {
+    if (out[k] == null && nu[k] != null) out[k] = nu[k];
+  }
   out.src = `${cur.src}+${nu.src}`;
   return out;
 }
@@ -376,10 +389,14 @@ async function handleApiNodes(req, res, url) {
   const all = mergeLive(await getNodes());
   const cutoff = Date.now() - maxAgeDays * 86400_000;
   const out = all
-    .filter((n) =>
-      n.lat >= minLat && n.lat <= maxLat &&
-      n.lon >= minLon && n.lon <= maxLon &&
-      (!n.posAt || Date.parse(n.posAt) >= cutoff))
+    .filter((n) => {
+      // age-filter on last ACTIVITY, not position age: an active node with an
+      // old (but valid) broadcast position should still be on the map
+      const activeAt = n.updAt || n.posAt;
+      return n.lat >= minLat && n.lat <= maxLat &&
+        n.lon >= minLon && n.lon <= maxLon &&
+        (!activeAt || Date.parse(activeAt) >= cutoff);
+    })
     .map((n) => {
       const r = reliability[n.id];
       if (!r) return n;
