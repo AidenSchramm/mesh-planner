@@ -225,6 +225,12 @@ button.wide { width: 100%; margin-top: 10px; }
   border-radius: 8px;
   display: none;
 }
+#unplaced-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
 #link-list.has-items { display: block; }
 .link-row {
   display: flex;

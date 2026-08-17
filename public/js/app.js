@@ -179,7 +179,9 @@
       });
       const res = await fetch(`/api/nodes?${qs}`);
       if (!res.ok) throw new Error(`node API HTTP ${res.status}`);
-      let { nodes } = await res.json();
+      const payload = await res.json();
+      let nodes = payload.nodes;
+      const unplacedNodes = payload.unplaced || [];
       if (!alive()) return;
       applyOverrides(nodes);
 
@@ -258,7 +260,7 @@
 
       lastResult = {
         nodes, links, placements, roles, nComponents, compOf, bbox, opts,
-        capped, topRegion, calibration, keepView, heightEstimates,
+        capped, topRegion, calibration, keepView, heightEstimates, unplacedNodes,
         obsByPair: new Map(linkObs.map((o) => [`${o.a}-${o.b}`, o])),
       };
       render(lastResult, label);
@@ -695,7 +697,9 @@
       const res = await fetch(`/api/overrides/${nodeId}/history`);
       if (res.ok) history = (await res.json()).history || [];
     } catch {}
-    if (!editState || lastResult.nodes[editState.i].id !== nodeId || !history.length) return;
+    const curId = editState &&
+      (editState.placing ? editState.placing.id : lastResult.nodes[editState.i]?.id);
+    if (curId !== nodeId || !history.length) return;
     list.innerHTML = history.slice(0, 6).map((e, k) => {
       const when = fmtAgo(e.at).replace(' ago', '');
       if (e.action === 'clear') return `<div class="eh-row muted" data-k="${k}">${when} &middot; cleared</div>`;
@@ -752,7 +756,7 @@
 
   $('edit-save').addEventListener('click', async () => {
     if (!editState || !lastResult) return;
-    const n = lastResult.nodes[editState.i];
+    const n = editState.placing || lastResult.nodes[editState.i];
     const alt = heightFieldMeters();
     const p = editState.marker.getLatLng();
     const o = {};
@@ -781,7 +785,7 @@
   $('edit-clear').addEventListener('click', async () => {
     if (!editState || !lastResult) return;
     try {
-      await setOverride(lastResult.nodes[editState.i].id, null);
+      await setOverride((editState.placing || lastResult.nodes[editState.i]).id, null);
     } catch (e) {
       setStatus(`Could not clear correction: ${e.message}`);
       return;
@@ -877,6 +881,7 @@
 
     renderStats(r, label);
     renderSuggestions(r);
+    renderUnplaced(r);
     $('node-panel').classList.remove('hidden');
 
     if (!r.keepView) map.fitBounds([[bbox.minLat, bbox.minLon], [bbox.maxLat, bbox.maxLon]]);
@@ -898,6 +903,7 @@
     $('stats-panel').classList.add('hidden');
     $('node-panel').classList.add('hidden');
     $('quality-panel').classList.add('hidden');
+    $('unplaced-panel').classList.add('hidden');
     $('suggestions-panel').classList.remove('hidden');
     nodesLayer.clearLayers(); linksLayer.clearLayers();
     reportedLayer.clearLayers(); suggestLayer.clearLayers();
@@ -1069,6 +1075,82 @@ ${wpts}
     a.download = 'mesh-planner-sites.gpx';
     a.click();
     URL.revokeObjectURL(a.href);
+  }
+
+  // ---- unplaced nodes: list + evidence-guessed placement --------------------
+
+  function renderUnplaced(r) {
+    const panel = $('unplaced-panel');
+    const list = $('unplaced-list');
+    const us = r.unplacedNodes || [];
+    if (!us.length) {
+      panel.classList.add('hidden');
+      list.innerHTML = '';
+      return;
+    }
+    panel.classList.remove('hidden');
+    panel.querySelector('summary').textContent = `Unplaced nodes (${us.length})`;
+    list.innerHTML = us.map((u, k) =>
+      `<div class="link-row" data-k="${k}" title="${escapeHtml(u.hw || '')}">
+        <span class="nm">${escapeHtml(u.name)}</span>
+        <span class="d">${u.hears.length ? `heard by ${u.hears.length}` : 'no RF evidence'} &middot; ${fmtAgo(u.updAt).replace(' ago', '')}</span>
+      </div>`).join('');
+    list.querySelectorAll('.link-row').forEach((row) => {
+      row.addEventListener('click', () => openPlacer(us[parseInt(row.dataset.k, 10)]));
+    });
+  }
+
+  // Weighted centroid of the placed nodes that hear it: stronger SNR and more
+  // receptions pull the guess closer. Single hearer gets a small offset so the
+  // pin doesn't sit exactly on top of the hearer.
+  function guessPosition(u) {
+    const byId = new Map(lastResult.nodes.map((n) => [n.id, n]));
+    const pts = [];
+    for (const h of u.hears || []) {
+      const n = byId.get(h.id);
+      if (!n) continue;
+      const w = Math.max(1, (h.snr != null ? h.snr + 26 : 12)) * Math.log2(2 + (h.n || 1));
+      pts.push({ lat: n.lat, lon: n.lon, w });
+    }
+    if (!pts.length) {
+      const b = lastResult.bbox;
+      return { lat: (b.minLat + b.maxLat) / 2, lon: (b.minLon + b.maxLon) / 2, from: 0 };
+    }
+    let W = 0, la = 0, lo = 0;
+    for (const p of pts) { W += p.w; la += p.lat * p.w; lo += p.lon * p.w; }
+    la /= W; lo /= W;
+    if (pts.length === 1) la += 0.004;
+    return { lat: la, lon: lo, from: pts.length };
+  }
+
+  function openPlacer(u) {
+    if (!lastResult) return;
+    closeEditor();
+    const g = guessPosition(u);
+    map.setView([g.lat, g.lon], Math.max(map.getZoom(), 12));
+    const marker = L.marker([g.lat, g.lon], {
+      draggable: true,
+      zIndexOffset: 2000,
+      icon: L.divIcon({ className: '', html: '<div class="edit-pin"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+    }).addTo(map);
+    editState = { placing: u, marker, origLat: g.lat, origLon: g.lon, posDirty: true };
+    $('edit-name').textContent = `${u.name} — placing`;
+    $('edit-unit').value = 'm';
+    $('edit-height').value = '';
+    $('edit-txp').value = '';
+    $('edit-txp').placeholder = `auto (${Analysis.defaultTxDbm(u.hw, null)})`;
+    $('edit-gain').value = '';
+    $('edit-mobile').checked = false;
+    setCoordsInput(g.lat, g.lon);
+    marker.on('drag', () => {
+      const p = marker.getLatLng();
+      setCoordsInput(p.lat, p.lng);
+    });
+    $('edit-panel').classList.remove('hidden');
+    loadEditHistory(u.id);
+    setStatus(g.from
+      ? `Placing ${u.name}: pin guessed from ${g.from} node${g.from === 1 ? '' : 's'} that hear it — drag to the true spot and Save.`
+      : `Placing ${u.name}: no RF evidence, pin starts at the area center — drag to the true spot and Save.`);
   }
 
   // ---- node data quality card -----------------------------------------------

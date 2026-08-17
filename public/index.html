@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mesh Planner — Meshtastic terrain &amp; coverage analysis</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="styles.css?v=19">
+<link rel="stylesheet" href="styles.css?v=20">
 </head>
 <body>
 
@@ -223,6 +223,14 @@
       </div>
     </details>
 
+    <details class="card hidden" open id="unplaced-panel">
+      <summary>Unplaced nodes</summary>
+      <div class="card-body">
+        <div class="muted-note" style="margin-bottom:8px">Active nodes that broadcast no position. Click one to place it — the pin starts at a guess based on which placed nodes hear it; drag to the real spot, add height if known, then Save.</div>
+        <div id="unplaced-list"></div>
+      </div>
+    </details>
+
     <footer>
       <p>Node data: <a href="https://meshtastic.liamcottle.net" target="_blank" rel="noopener">meshtastic.liamcottle.net</a> + <a href="https://meshmap.net" target="_blank" rel="noopener">meshmap.net</a> (MQTT-reported; not all nodes publish positions).
       Terrain: Mapzen/AWS Terrain Tiles. Geocoding: OSM Nominatim.
@@ -232,8 +240,8 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="js/elevation.js?v=19"></script>
-<script src="js/analysis.js?v=19"></script>
-<script src="js/app.js?v=19"></script>
+<script src="js/elevation.js?v=20"></script>
+<script src="js/analysis.js?v=20"></script>
+<script src="js/app.js?v=20"></script>
 </body>
 </html>

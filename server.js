@@ -76,8 +76,33 @@ function readBody(req, limit = 64 * 1024) {
 
 // ---- upstream node cache ----------------------------------------------------
 
-let cache = { at: 0, nodes: null };
+let cache = { at: 0, nodes: null, unplaced: [], extents: {} };
 let inflight = null;
+
+// Nodes that are active but broadcast no position: kept separately so the
+// community can place them manually (a placement override turns them into
+// regular placed nodes). Evidence of who hears them enables position guessing.
+function makeUnplacedCollector() {
+  const byId = new Map();
+  return {
+    note(rec) {
+      const cur = byId.get(rec.id);
+      if (!cur) { byId.set(rec.id, rec); return; }
+      if (rec.updAt && (!cur.updAt || Date.parse(rec.updAt) > Date.parse(cur.updAt))) {
+        cur.updAt = rec.updAt;
+      }
+      for (const k of ['name', 'short', 'hw', 'roleName']) {
+        if (cur[k] == null && rec[k] != null) cur[k] = rec[k];
+      }
+      if (rec.neighbours && rec.neighbours.length) cur.neighbours = rec.neighbours;
+      if (!cur.src.includes(rec.src)) cur.src += '+' + rec.src;
+    },
+    finish(placedIds) {
+      for (const id of placedIds) byId.delete(id); // positioned elsewhere
+      return [...byId.values()];
+    },
+  };
+}
 
 function slimNode(n) {
   return {
@@ -220,10 +245,21 @@ async function fetchUpstream() {
   ]);
 
   const byId = new Map();
+  const unplaced = makeUnplacedCollector();
   if (meshmap.status === 'fulfilled') {
     for (const [id, n] of Object.entries(meshmap.value)) {
-      if (n.latitude == null || n.longitude == null) continue;
-      if (n.latitude === 0 && n.longitude === 0) continue;
+      if (n.latitude == null || n.longitude == null ||
+        (n.latitude === 0 && n.longitude === 0)) {
+        const lastSeen = n.seenBy ? Math.max(...Object.values(n.seenBy)) : null;
+        unplaced.note({
+          id: Number(id), hex: '!' + (Number(id) >>> 0).toString(16).padStart(8, '0'),
+          name: n.longName || null, short: n.shortName || null,
+          hw: n.hwModel || null, roleName: n.role || null,
+          updAt: lastSeen ? new Date(lastSeen * 1000).toISOString() : null,
+          neighbours: null, src: 'meshmap',
+        });
+        continue;
+      }
       byId.set(Number(id), slimMeshmapNode(id, n));
     }
   } else {
@@ -232,8 +268,19 @@ async function fetchUpstream() {
   if (liam.status === 'fulfilled') {
     // liamcottle records are richer (neighbours, region, firmware) — they win.
     for (const n of liam.value.nodes || []) {
-      if (n.latitude == null || n.longitude == null) continue;
-      if (n.latitude === 0 && n.longitude === 0) continue;
+      if (n.latitude == null || n.longitude == null ||
+        (n.latitude === 0 && n.longitude === 0)) {
+        unplaced.note({
+          id: Number(n.node_id), hex: n.node_id_hex,
+          name: n.long_name || null, short: n.short_name || null,
+          hw: n.hardware_model_name || null, roleName: n.role_name || null,
+          updAt: n.updated_at || null,
+          neighbours: Array.isArray(n.neighbours)
+            ? n.neighbours.map((nb) => ({ id: nb.node_id, snr: nb.snr })) : null,
+          src: 'liamcottle',
+        });
+        continue;
+      }
       byId.set(Number(n.node_id), slimNode(n));
     }
   } else {
@@ -241,6 +288,7 @@ async function fetchUpstream() {
   }
   // regional instances: freshest local truth — overlay onto aggregate records
   const extraCounts = [];
+  const extents = {};
   extras.forEach((res, k) => {
     const base = EXTRA_SOURCES[k];
     const label = base.replace(/^https?:\/\//, '');
@@ -250,19 +298,37 @@ async function fetchUpstream() {
       return;
     }
     let added = 0, merged = 0;
+    const ext = { minLat: 90, maxLat: -90, minLon: 180, maxLon: -180, n: 0 };
     for (const raw of res.value) {
       const e = slimPotatoNode(raw, label);
-      if (!e) continue;
+      if (!e) {
+        // position-less but active on this regional instance
+        const id = parseInt(String(raw.node_id || '').replace('!', ''), 16) >>> 0;
+        if (id) {
+          unplaced.note({
+            id, hex: '!' + id.toString(16).padStart(8, '0'),
+            name: raw.long_name || null, short: raw.short_name || null,
+            hw: raw.hw_model || null, roleName: raw.role || null,
+            updAt: raw.last_heard ? new Date(raw.last_heard * 1000).toISOString() : null,
+            neighbours: null, src: label,
+          });
+        }
+        continue;
+      }
+      ext.minLat = Math.min(ext.minLat, e.lat); ext.maxLat = Math.max(ext.maxLat, e.lat);
+      ext.minLon = Math.min(ext.minLon, e.lon); ext.maxLon = Math.max(ext.maxLon, e.lon);
+      ext.n++;
       const cur = byId.get(e.id);
       if (!cur) { byId.set(e.id, e); added++; }
       else { byId.set(e.id, mergeFresher(cur, e)); merged++; }
     }
+    if (ext.n > 0) extents[label] = ext;
     extraCounts.push(`${label}: +${added} new, ${merged} merged`);
   });
   if (byId.size === 0) throw new Error('all upstream node sources failed');
 
   const nodes = [...byId.values()];
-  cache = { at: Date.now(), nodes };
+  cache = { at: Date.now(), nodes, unplaced: unplaced.finish(byId.keys()), extents };
   console.log(`[nodes] cached ${nodes.length} positioned nodes ` +
     `(liamcottle ${liam.status}, meshmap ${meshmap.status}` +
     (extraCounts.length ? `; ${extraCounts.join('; ')}` : '') +
@@ -386,7 +452,27 @@ async function handleApiNodes(req, res, url) {
     return sendJson(req, res, { error: 'minLat, maxLat, minLon, maxLon are required' }, 400);
   }
 
-  const all = mergeLive(await getNodes());
+  const base = await getNodes();
+
+  // community-placed formerly-unplaced nodes become regular placed nodes
+  const placedFromOverrides = [];
+  for (const u of cache.unplaced || []) {
+    const o = overrides[u.id];
+    if (o && o.lat != null) {
+      placedFromOverrides.push({
+        id: u.id, hex: u.hex, name: u.name || u.hex, short: u.short || '',
+        role: null, roleName: u.roleName || 'CLIENT',
+        lat: o.lat, lon: o.lon, alt: o.alt ?? null, prec: null,
+        hw: u.hw, fw: null, region: null, preset: null,
+        util: null, airTx: null, battery: null,
+        neighbours: u.neighbours || null,
+        posAt: o.updatedAt, updAt: u.updAt || o.updatedAt,
+        src: (u.src || 'unknown') + '+placed',
+      });
+    }
+  }
+
+  const all = mergeLive(base).concat(placedFromOverrides);
   const cutoff = Date.now() - maxAgeDays * 86400_000;
   const out = all
     .filter((n) => {
@@ -400,15 +486,70 @@ async function handleApiNodes(req, res, url) {
     .map((n) => {
       const r = reliability[n.id];
       if (!r) return n;
-      const out = { ...n };
-      out.relSamples = r.s;
+      const o = { ...n };
+      o.relSamples = r.s;
       // require half a day of samples before claiming an uptime figure
-      if (r.s >= 12) out.uptime = r.u / r.s;
+      if (r.s >= 12) o.uptime = r.u / r.s;
       // moved >500 m in over 20% of samples -> treat as a mobile node
-      if (r.s >= 5 && (r.mv || 0) / r.s > 0.2) out.mobile = true;
-      return out;
+      if (r.s >= 5 && (r.mv || 0) / r.s > 0.2) o.mobile = true;
+      return o;
     });
-  sendJson(req, res, { fetchedAt: cache.at, total: all.length, nodes: out });
+
+  // Active position-less nodes relevant to this view, with hearing evidence
+  // (neighbour reports + stored SNR observations) for placement guessing.
+  const placedIds = new Set(out.map((n) => n.id));
+  const heardBy = new Map(); // unplacedId -> Map(placedId -> {snr, n})
+  const addEv = (uid, pid, snr, cnt) => {
+    if (!heardBy.has(uid)) heardBy.set(uid, new Map());
+    const m = heardBy.get(uid);
+    const cur = m.get(pid) || { snr: null, n: null };
+    if (snr != null) cur.snr = cur.snr == null ? snr : Math.max(cur.snr, snr);
+    if (cnt != null) cur.n = (cur.n || 0) + cnt;
+    m.set(pid, cur);
+  };
+  for (const n of out) {
+    for (const nb of n.neighbours || []) {
+      if (!placedIds.has(nb.id)) addEv(nb.id, n.id, nb.snr, null);
+    }
+  }
+  const M = 0.3; // extent margin, degrees
+  const inExtent = (label) => {
+    const e = (cache.extents || {})[label];
+    return e && !(e.maxLat + M < minLat || e.minLat - M > maxLat ||
+      e.maxLon + M < minLon || e.minLon - M > maxLon);
+  };
+  const candidates = [];
+  for (const u of cache.unplaced || []) {
+    if (overrides[u.id]?.lat != null) continue; // already community-placed
+    if (!u.updAt || Date.parse(u.updAt) < cutoff) continue;
+    let relevant = heardBy.has(u.id);
+    for (const nb of u.neighbours || []) {
+      if (placedIds.has(nb.id)) { addEv(u.id, nb.id, nb.snr, null); relevant = true; }
+    }
+    if (!relevant) relevant = u.src.split('+').some(inExtent);
+    if (relevant) candidates.push(u);
+  }
+  if (candidates.length) {
+    const qIds = [...placedIds].slice(0, 340)
+      .concat(candidates.slice(0, 60).map((u) => u.id));
+    const candIds = new Set(candidates.map((u) => u.id));
+    for (const ob of LinkStore.query(qIds)) {
+      const uid = candIds.has(ob.a) && placedIds.has(ob.b) ? ob.a
+        : candIds.has(ob.b) && placedIds.has(ob.a) ? ob.b : null;
+      if (uid != null) addEv(uid, uid === ob.a ? ob.b : ob.a, ob.avgSnr, ob.n);
+    }
+  }
+  candidates.sort((a, b) =>
+    (heardBy.get(b.id)?.size || 0) - (heardBy.get(a.id)?.size || 0) ||
+    Date.parse(b.updAt) - Date.parse(a.updAt));
+  const unplacedOut = candidates.slice(0, 40).map((u) => ({
+    id: u.id, hex: u.hex, name: u.name || u.hex, short: u.short || '',
+    hw: u.hw, roleName: u.roleName, updAt: u.updAt, src: u.src,
+    hears: [...(heardBy.get(u.id) || new Map()).entries()]
+      .map(([pid, ev]) => ({ id: pid, snr: ev.snr, n: ev.n })),
+  }));
+
+  sendJson(req, res, { fetchedAt: cache.at, total: all.length, nodes: out, unplaced: unplacedOut });
 }
 
 // ---- corrections store (synced overrides + history) -------------------------
