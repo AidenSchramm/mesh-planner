@@ -22,6 +22,11 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const TILE_DIR = path.join(DATA_DIR, 'tiles');
 const UPSTREAM = 'https://meshtastic.liamcottle.net/api/v1/nodes';
 const UPSTREAM_MESHMAP = 'https://meshmap.net/nodes.json'; // official-broker aggregate, fills regional gaps
+// Optional regional instances running Potato Mesh (github.com/l5yth/potato-mesh):
+// comma-separated base URLs, e.g. EXTRA_SOURCES=https://potato.sodakmesh.org
+// Community servers typically see far more local nodes than the public broker.
+const EXTRA_SOURCES = (process.env.EXTRA_SOURCES || '')
+  .split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean);
 const UPSTREAM_TILES = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 const UPSTREAM_GEOCODE = 'https://nominatim.openstreetmap.org/search';
 const CACHE_TTL_MS = 5 * 60 * 1000; // refetch node DBs at most every 5 min
@@ -131,12 +136,61 @@ function slimMeshmapNode(id, n) {
   };
 }
 
+// Potato Mesh /api/nodes record -> slim node. Coordinates arrive in plain
+// degrees; preset names like "LongFast" are normalized to LONG_FAST; a 0.0
+// altitude means "not reported".
+function slimPotatoNode(n, srcLabel) {
+  const id = parseInt(String(n.node_id).replace('!', ''), 16) >>> 0;
+  if (!id || n.latitude == null || n.longitude == null) return null;
+  if (n.latitude === 0 && n.longitude === 0) return null;
+  const posIso = n.position_time ? new Date(n.position_time * 1000).toISOString() : null;
+  const seenIso = n.last_heard ? new Date(n.last_heard * 1000).toISOString() : posIso;
+  const freq = Number(n.lora_freq);
+  const region = freq >= 900 ? 'US' : freq >= 860 ? 'EU_868' : freq >= 430 && freq < 440 ? 'EU_433' : null;
+  return {
+    id,
+    hex: '!' + id.toString(16).padStart(8, '0'),
+    name: n.long_name || n.node_id,
+    short: n.short_name || '',
+    role: null,
+    roleName: n.role || 'CLIENT',
+    lat: n.latitude,
+    lon: n.longitude,
+    alt: n.altitude || null,
+    prec: n.precision_bits ?? null,
+    hw: n.hw_model || null,
+    fw: null,
+    region,
+    preset: n.modem_preset ? n.modem_preset.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase() : null,
+    util: null, airTx: null, battery: null,
+    neighbours: null,
+    posAt: posIso || seenIso,
+    updAt: seenIso,
+    src: srcLabel,
+  };
+}
+
+// Overlay a fresher record onto an existing one, keeping rich fields
+// (neighbours, utilization, battery) the fresher source doesn't carry.
+function mergeFresher(cur, nu) {
+  const nuNewer = !cur.updAt || (nu.updAt && Date.parse(nu.updAt) > Date.parse(cur.updAt));
+  if (!nuNewer) return cur;
+  const out = { ...cur };
+  for (const [k, v] of Object.entries(nu)) {
+    if (v != null) out[k] = v;
+  }
+  out.neighbours = cur.neighbours ?? null;
+  out.util = cur.util; out.airTx = cur.airTx; out.battery = cur.battery;
+  out.src = `${cur.src}+${nu.src}`;
+  return out;
+}
+
 async function fetchUpstream() {
   console.log('[nodes] fetching upstream node databases...');
   const t0 = Date.now();
   const headers = { 'User-Agent': UA };
 
-  const [liam, meshmap] = await Promise.allSettled([
+  const [liam, meshmap, ...extras] = await Promise.allSettled([
     fetch(UPSTREAM, { headers }).then((r) => {
       if (!r.ok) throw new Error(`liamcottle HTTP ${r.status}`);
       return r.json();
@@ -145,6 +199,11 @@ async function fetchUpstream() {
       if (!r.ok) throw new Error(`meshmap HTTP ${r.status}`);
       return r.json();
     }),
+    ...EXTRA_SOURCES.map((base) =>
+      fetch(`${base}/api/nodes`, { headers }).then((r) => {
+        if (!r.ok) throw new Error(`${base} HTTP ${r.status}`);
+        return r.json();
+      })),
   ]);
 
   const byId = new Map();
@@ -167,12 +226,34 @@ async function fetchUpstream() {
   } else {
     console.warn('[nodes] liamcottle fetch failed:', liam.reason?.message);
   }
-  if (byId.size === 0) throw new Error('both upstream node sources failed');
+  // regional instances: freshest local truth — overlay onto aggregate records
+  const extraCounts = [];
+  extras.forEach((res, k) => {
+    const base = EXTRA_SOURCES[k];
+    const label = base.replace(/^https?:\/\//, '');
+    if (res.status !== 'fulfilled' || !Array.isArray(res.value)) {
+      console.warn(`[nodes] extra source ${label} failed:`, res.reason?.message || 'bad payload');
+      extraCounts.push(`${label}:failed`);
+      return;
+    }
+    let added = 0, merged = 0;
+    for (const raw of res.value) {
+      const e = slimPotatoNode(raw, label);
+      if (!e) continue;
+      const cur = byId.get(e.id);
+      if (!cur) { byId.set(e.id, e); added++; }
+      else { byId.set(e.id, mergeFresher(cur, e)); merged++; }
+    }
+    extraCounts.push(`${label}: +${added} new, ${merged} merged`);
+  });
+  if (byId.size === 0) throw new Error('all upstream node sources failed');
 
   const nodes = [...byId.values()];
   cache = { at: Date.now(), nodes };
   console.log(`[nodes] cached ${nodes.length} positioned nodes ` +
-    `(liamcottle ${liam.status}, meshmap ${meshmap.status}) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    `(liamcottle ${liam.status}, meshmap ${meshmap.status}` +
+    (extraCounts.length ? `; ${extraCounts.join('; ')}` : '') +
+    `) in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   sampleReliability(nodes);
   return nodes;
 }

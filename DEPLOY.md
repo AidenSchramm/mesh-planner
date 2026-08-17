@@ -46,21 +46,29 @@ useradd --system --home /opt/meshplanner --shell /usr/sbin/nologin meshplanner
 mkdir -p /opt/meshplanner /var/lib/meshplanner
 ```
 
-Copy the project from your machine (run from the `Mesh` folder locally):
+Clone the repo (on the VPS):
 
 ```bash
-scp -r server.js mqtt-live.js public deploy root@<VPS-IP>:/opt/meshplanner/
-```
-
-Then on the VPS:
-
-```bash
-chown -R meshplanner:meshplanner /opt/meshplanner /var/lib/meshplanner
+git clone https://github.com/AidenSchramm/mesh-planner.git /opt/meshplanner
+chown -R meshplanner:meshplanner /var/lib/meshplanner
 cp /opt/meshplanner/deploy/meshplanner.service /etc/systemd/system/
+ln -sf /opt/meshplanner/deploy/update.sh /usr/local/bin/meshplanner-update
 systemctl daemon-reload
 systemctl enable --now meshplanner
 systemctl status meshplanner        # should be active; check journalctl -u meshplanner on issues
 curl -s localhost:8620/api/health   # {"ok":true,...}
+```
+
+Instance-specific configuration (extra data sources, MQTT regions) goes in a
+systemd drop-in so it survives updates and stays out of git:
+
+```bash
+mkdir -p /etc/systemd/system/meshplanner.service.d
+cat > /etc/systemd/system/meshplanner.service.d/local.conf <<'EOF'
+[Service]
+Environment=EXTRA_SOURCES=https://potato.sodakmesh.org
+EOF
+systemctl daemon-reload && systemctl restart meshplanner
 ```
 
 ## 5. HTTPS via Caddy
@@ -94,9 +102,14 @@ Keeps 14 daily archives of the data files in `/var/lib/meshplanner/backups/`.
 
 ## 8. Updating the app
 
+Push to GitHub, then on the VPS (or via ssh in one line):
+
 ```bash
-scp -r server.js mqtt-live.js public root@<VPS-IP>:/opt/meshplanner/ && ssh root@<VPS-IP> systemctl restart meshplanner
+ssh root@<VPS-IP> meshplanner-update
 ```
+
+This fetches origin/main, hard-resets the working tree to it, restarts the
+service, and prints the health check plus the deployed commit.
 
 ## Data & backups
 

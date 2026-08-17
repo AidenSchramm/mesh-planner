@@ -35,6 +35,7 @@ map and click **Analyze current map view**.
 | `MQTT_REGIONS` | `US` | Comma-separated region trees to ingest for link observations (bandwidth scales with this) |
 | `MQTT_HOST` | `mqtt.meshtastic.org` | MQTT broker for live map reports / observations |
 | `MQTT_DISABLE` | unset | Set `1` to disable the MQTT listener entirely |
+| `EXTRA_SOURCES` | unset | Comma-separated base URLs of regional [Potato Mesh](https://github.com/l5yth/potato-mesh) instances (e.g. `https://potato.sodakmesh.org`) — community servers usually see far more local nodes than the public brokers |
 
 For a production deployment (systemd + Caddy HTTPS on a VPS), see [DEPLOY.md](DEPLOY.md).
 
