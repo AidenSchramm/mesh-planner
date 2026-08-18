@@ -852,10 +852,32 @@
       }
     }
 
+    // markers stacked on identical coordinates (common with privacy-truncated
+    // positions snapping to the same grid cell) get spread into a small ring
+    // so every node stays visible and clickable; modeling keeps true coords
+    const coordGroups = new Map();
+    nodes.forEach((n, i) => {
+      const key = `${n.lat.toFixed(5)},${n.lon.toFixed(5)}`;
+      if (!coordGroups.has(key)) coordGroups.set(key, []);
+      coordGroups.get(key).push(i);
+    });
+    const displayPos = nodes.map((n) => [n.lat, n.lon]);
+    for (const g of coordGroups.values()) {
+      if (g.length < 2) continue;
+      const R = 0.0013; // ~140 m ring radius
+      g.forEach((i, k) => {
+        const az = (2 * Math.PI * k) / g.length;
+        displayPos[i] = [
+          nodes[i].lat + R * Math.cos(az),
+          nodes[i].lon + (R * Math.sin(az)) / Math.cos((nodes[i].lat * Math.PI) / 180),
+        ];
+      });
+    }
+
     // nodes
     nodeMarkers = nodes.map((n, i) => {
       const deg = roles.degree ? roles.degree[i] : 0;
-      return L.circleMarker([n.lat, n.lon], {
+      return L.circleMarker(displayPos[i], {
         radius: 7,
         color: '#e6ebf2',
         weight: 1.5,
