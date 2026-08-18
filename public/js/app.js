@@ -817,44 +817,10 @@
     removeWhatif();
     clearMeasure();
 
-    // computed LOS links (refs kept for the failure simulation)
-    linkLines = links.map((l) => {
-      const a = nodes[l.i], b = nodes[l.j];
-      const line = L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
-        color: l.status === 'clear' ? '#3ddc84' : '#ffb347',
-        weight: l.status === 'clear' ? 2.2 : 1.8,
-        opacity: l.status === 'clear' ? 0.75 : 0.7,
-        dashArray: l.status === 'clear' ? null : '6 6',
-      }).bindPopup(
-        `<b>${escapeHtml(a.name)} ↔ ${escapeHtml(b.name)}</b><br>` +
-        `${(l.dist / 1000).toFixed(1)} km — ${l.status === 'clear' ? 'clear LOS + Fresnel' : 'LOS clear, Fresnel obstructed'}`
-      ).addTo(linksLayer);
-      return { link: l, line };
-    });
-
-    // reported RF neighbours (ground truth from neighbour_info packets)
-    const byId = new Map(nodes.map((n, i) => [n.id, i]));
-    const seenPairs = new Set();
-    for (const n of nodes) {
-      if (!n.neighbours) continue;
-      for (const nb of n.neighbours) {
-        const j = byId.get(nb.id);
-        if (j == null) continue;
-        const key = [Math.min(n.id, nb.id), Math.max(n.id, nb.id)].join('-');
-        if (seenPairs.has(key)) continue;
-        seenPairs.add(key);
-        const b = nodes[j];
-        L.polyline([[n.lat, n.lon], [b.lat, b.lon]], {
-          color: '#4da3ff', weight: 1.8, opacity: 0.8, dashArray: '2 7',
-        }).bindPopup(
-          `<b>Reported RF link</b><br>${escapeHtml(n.name)} heard ${escapeHtml(b.name)}<br>SNR ${nb.snr} dB`
-        ).addTo(reportedLayer);
-      }
-    }
-
     // markers stacked on identical coordinates (common with privacy-truncated
     // positions snapping to the same grid cell) get spread into a small ring
-    // so every node stays visible and clickable; modeling keeps true coords
+    // so every node stays visible and clickable; modeling keeps true coords.
+    // Link lines anchor at the DISPLAY positions so they attach to markers.
     const coordGroups = new Map();
     nodes.forEach((n, i) => {
       const key = `${n.lat.toFixed(5)},${n.lon.toFixed(5)}`;
@@ -873,6 +839,41 @@
         ];
       });
     }
+
+    // computed LOS links (refs kept for the failure simulation)
+    linkLines = links.map((l) => {
+      const a = nodes[l.i], b = nodes[l.j];
+      const line = L.polyline([displayPos[l.i], displayPos[l.j]], {
+        color: l.status === 'clear' ? '#3ddc84' : '#ffb347',
+        weight: l.status === 'clear' ? 2.2 : 1.8,
+        opacity: l.status === 'clear' ? 0.75 : 0.7,
+        dashArray: l.status === 'clear' ? null : '6 6',
+      }).bindPopup(
+        `<b>${escapeHtml(a.name)} ↔ ${escapeHtml(b.name)}</b><br>` +
+        `${(l.dist / 1000).toFixed(1)} km — ${l.status === 'clear' ? 'clear LOS + Fresnel' : 'LOS clear, Fresnel obstructed'}`
+      ).addTo(linksLayer);
+      return { link: l, line };
+    });
+
+    // reported RF neighbours (ground truth from neighbour_info packets)
+    const byId = new Map(nodes.map((n, i) => [n.id, i]));
+    const seenPairs = new Set();
+    nodes.forEach((n, i) => {
+      if (!n.neighbours) return;
+      for (const nb of n.neighbours) {
+        const j = byId.get(nb.id);
+        if (j == null) continue;
+        const key = [Math.min(n.id, nb.id), Math.max(n.id, nb.id)].join('-');
+        if (seenPairs.has(key)) continue;
+        seenPairs.add(key);
+        const b = nodes[j];
+        L.polyline([displayPos[i], displayPos[j]], {
+          color: '#4da3ff', weight: 1.8, opacity: 0.8, dashArray: '2 7',
+        }).bindPopup(
+          `<b>Reported RF link</b><br>${escapeHtml(n.name)} heard ${escapeHtml(b.name)}<br>SNR ${nb.snr} dB`
+        ).addTo(reportedLayer);
+      }
+    });
 
     // nodes
     nodeMarkers = nodes.map((n, i) => {
